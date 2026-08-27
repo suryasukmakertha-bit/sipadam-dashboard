@@ -2,7 +2,7 @@
   "name": "SIPADAM — Dashboard Internal",
   "short_name": "SIPADAM",
   "description": "Dashboard internal pendataan & penilaian alat proteksi kebakaran — Damkar Buleleng",
-  "start_url": "./sipadam-dashboard.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
