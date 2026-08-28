@@ -77,6 +77,7 @@
   .logout-btn:hover{border-color:#fff;color:#fff;}
 
   @media(max-width:480px){
+    html,body{overflow-x:hidden;max-width:100%;}
     .topbar{padding:12px 14px;gap:10px;}
     .tb-left{gap:9px;}
     .tb-left img{width:38px;height:38px;border-radius:10px;}
@@ -137,6 +138,17 @@
   }
   .search-wrap input:focus{border-color:var(--navy);background:#fff;outline:none;}
   table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px;}
+  @media(max-width:480px){
+    /* Judul, kotak pencarian, dan tombol unduh TIDAK ikut digeser lagi —
+       hanya #tableArea (isi tabelnya saja) yang boleh scroll horizontal.
+       Selektor di-scope ke "#tableArea table" supaya TIDAK ikut menyembunyikan
+       kolom pada tabel-tabel lain (mis. Detail APAR di halaman detail). */
+    .table-card{overflow-x:visible;}
+    #tableArea{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;}
+    #tableArea table{min-width:0;font-size:12px;}
+    #tableArea table th:nth-child(3), #tableArea table td:nth-child(3),
+    #tableArea table th:nth-child(4), #tableArea table td:nth-child(4){display:none;}
+  }
   th{
     text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.03em;
     color:var(--ink-faint);border-bottom:1px solid var(--line);padding:8px 10px;font-weight:600;
@@ -194,7 +206,7 @@
     .detail-back{font-size:13px;}
     .detail-header{flex-direction:column;align-items:flex-start;padding:20px 20px;gap:10px;}
     .detail-header h2{font-size:18px;}
-    .detail-card{padding:16px 16px;}
+    .detail-card{padding:16px 16px;max-width:100%;overflow-x:hidden;}
     .card-head-row{flex-wrap:wrap;gap:8px;}
     .detail-row{flex-wrap:wrap;row-gap:6px;}
     .detail-row .dv{text-align:left;flex:1 1 100%;}
@@ -253,7 +265,7 @@
   .chip{background:#EEF1F7;color:var(--navy);font-size:12px;font-weight:500;padding:5px 12px;border-radius:20px;}
   .mini-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px;}
   @media(max-width:480px){
-    .mini-table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;}
+    .mini-table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;max-width:100%;}
   }
   .mini-table th{text-align:left;font-size:10.5px;text-transform:uppercase;color:var(--ink-faint);padding:6px 8px;border-bottom:1px solid var(--line);}
   .mini-table td{padding:8px;border-bottom:1px solid var(--line);}
@@ -285,7 +297,7 @@
       </button>
     </div>
     <p class="login-err" id="loginErr">Username atau password salah.</p>
-    <button onclick="doLogin()">Masuk</button>
+    <button id="loginBtn" onclick="doLogin()">Masuk</button>
   </div>
 </div>
 
@@ -409,10 +421,9 @@
 <script>
 /* ===================== CONFIG ===================== */
 const ENDPOINT_URL = 'https://script.google.com/macros/s/AKfycbyDOcJxrKxG93shktv7HWbJ4XAB2GUarITaeFu617OOYuHLNOGKV7vK-2ms9iYnl-WNlQ/exec'; // <-- tempel URL Web App Apps Script (diakhiri /exec) di sini
-const SHARED_SECRET = 'damkar21113'; // harus SAMA PERSIS dengan SHARED_SECRET di Code.gs
-const LOGIN_USER = 'bidangpencegahan';
-const LOGIN_PASS = 'damkar21113';
 /* ==================================================== */
+/* Username/password TIDAK LAGI ada di sini — sekarang dicek di Apps Script
+   (server), supaya tidak terlihat siapa pun yang membuka kode halaman ini. */
 
 function togglePasswordVisibility(){
   const input = document.getElementById('loginPass');
@@ -424,26 +435,66 @@ function togglePasswordVisibility(){
   hideIcon.style.display = isHidden ? 'block' : 'none';
 }
 
-function doLogin(){
+/* Token sesi di memori saja (bukan localStorage/sessionStorage) — hilang
+   otomatis kalau halaman ditutup/di-refresh, harus login ulang. */
+let sessionToken = null;
+
+async function doLogin(){
   const u = document.getElementById('loginUser').value.trim();
   const p = document.getElementById('loginPass').value;
-  if(u===LOGIN_USER && p===LOGIN_PASS){
-    document.getElementById('loginScreen').style.display='none';
-    document.getElementById('app').style.display='block';
-    sessionStorage_set('sipadam_auth','1');
-    loadData();
-  } else {
-    document.getElementById('loginErr').style.display='block';
+  const errEl = document.getElementById('loginErr');
+  const btn = document.getElementById('loginBtn');
+  errEl.style.display = 'none';
+
+  if(!u || !p){
+    errEl.textContent = 'Username dan password wajib diisi.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = 'Memeriksa…';
+
+  try{
+    const res = await fetch(ENDPOINT_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ action:'login', username:u, password:p })
+    });
+    const json = await res.json();
+    if(json.ok && json.token){
+      sessionToken = json.token;
+      document.getElementById('loginScreen').style.display='none';
+      document.getElementById('app').style.display='block';
+      loadData();
+    } else {
+      errEl.textContent = json.error || 'Username atau password salah.';
+      errEl.style.display = 'block';
+    }
+  } catch(err){
+    errEl.textContent = 'Gagal terhubung ke server. Periksa koneksi internet Anda.';
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
   }
 }
+
 function doLogout(){
-  sessionStorage_set('sipadam_auth','');
+  // Cabut token di server juga (fire-and-forget, tidak perlu ditunggu) —
+  // supaya token lama tidak bisa dipakai lagi kalau bocor.
+  if(sessionToken){
+    fetch(ENDPOINT_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ action:'logout', token: sessionToken })
+    }).catch(()=>{});
+  }
+  sessionToken = null;
   document.getElementById('app').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
 }
-/* In-memory session flag (no browser storage APIs used) */
-let _authFlag = '';
-function sessionStorage_set(k,v){ _authFlag = v; }
 
 let rawData = [];
 let charts = {};
@@ -454,7 +505,7 @@ async function fetchDataOnce(){
   const controller = new AbortController();
   const timeoutId = setTimeout(()=>controller.abort(), 20000);
   try{
-    const url = ENDPOINT_URL + '?key=' + encodeURIComponent(SHARED_SECRET);
+    const url = ENDPOINT_URL + '?token=' + encodeURIComponent(sessionToken || '');
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeoutId);
     const json = await res.json();
@@ -640,7 +691,8 @@ function renderCharts(data){
 
   const statusCounts = countBy(data,'StatusInstansi');
   const statusValues = Object.values(statusCounts);
-  const statusColors = ['#1E7B34','#E1372C','#9AA0AC'];
+  const STATUS_COLOR_MAP = {'Layak':'#1E7B34','Tidak Layak':'#E1372C'};
+  const statusColors = Object.keys(statusCounts).map(k => STATUS_COLOR_MAP[k] || '#9AA0AC');
   charts.status = new Chart(document.getElementById('chartStatus'), {
     type:'doughnut',
     data:{
@@ -1017,6 +1069,7 @@ async function saveSectionUpdate(fields, btnEl, errId){
 
   const payload = {
     action:'update',
+    token: sessionToken,
     submissionId: currentDetailRow.SubmissionId || '',
     timestampFallback: currentDetailRow.Timestamp || '',
     namaInstansiFallback: currentDetailRow.NamaInstansi || '',
