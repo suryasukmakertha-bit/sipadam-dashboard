@@ -906,6 +906,10 @@ function showDetail(r){
           <div class="detail-row"><span class="dk">Jenis gedung</span><span class="dv">${r.JenisGedung || '—'}</span></div>
           <div class="detail-row"><span class="dk">Luas gedung</span><span class="dv">${r.LuasGedung ? r.LuasGedung + ' ' + unitLabel(r.LuasSatuan) : '—'}</span></div>
           <div class="detail-row"><span class="dk">Jumlah staff</span><span class="dv">${r.JumlahStaff || '—'}</span></div>
+          <div class="detail-row">
+            <span class="dk">Titik lokasi (GPS)</span>
+            <span class="dv">${(r.Latitude && r.Longitude) ? `<a href="https://www.google.com/maps?q=${r.Latitude},${r.Longitude}" target="_blank" rel="noopener" style="color:var(--navy);font-weight:600;">Lihat di peta ↗</a>` : '—'}</span>
+          </div>
         </div>
       </div>
 
@@ -1117,6 +1121,11 @@ function editDataInstansi(){
       </div>
     </div>
     <div class="edit-form-field"><label>Jumlah staff</label><input type="number" id="ed_JumlahStaff" value="${escAttr(r.JumlahStaff)}"></div>
+    <div class="edit-form-field" style="display:flex;gap:8px;">
+      <div style="flex:1;"><label style="display:block;font-size:11.5px;color:var(--ink-soft);margin-bottom:5px;">Latitude</label><input type="text" id="ed_Latitude" placeholder="cth. -8.112345" value="${escAttr(r.Latitude)}"></div>
+      <div style="flex:1;"><label style="display:block;font-size:11.5px;color:var(--ink-soft);margin-bottom:5px;">Longitude</label><input type="text" id="ed_Longitude" placeholder="cth. 115.089012" value="${escAttr(r.Longitude)}"></div>
+    </div>
+    <p style="font-size:11.5px;color:var(--ink-faint);margin:-6px 0 0;">Untuk data lama: buka lokasinya di Google Maps di HP/laptop Anda, klik kanan/tahan pada titik lokasi, salin koordinat yang muncul, lalu tempel di sini.</p>
     <div class="edit-actions">
       <button class="edit-cancel-btn" onclick="showDetail(currentDetailRow)">Batal</button>
       <button class="edit-save-btn" id="btnSaveDataInstansi" onclick="saveDataInstansi()">Simpan</button>
@@ -1133,7 +1142,9 @@ function saveDataInstansi(){
     JenisGedung: document.getElementById('ed_JenisGedung').value,
     LuasGedung: document.getElementById('ed_LuasGedung').value,
     LuasSatuan: document.getElementById('ed_LuasSatuan').value,
-    JumlahStaff: document.getElementById('ed_JumlahStaff').value
+    JumlahStaff: document.getElementById('ed_JumlahStaff').value,
+    Latitude: document.getElementById('ed_Latitude').value.trim(),
+    Longitude: document.getElementById('ed_Longitude').value.trim()
   };
   saveSectionUpdate(fields, document.getElementById('btnSaveDataInstansi'), 'errDataInstansi');
 }
