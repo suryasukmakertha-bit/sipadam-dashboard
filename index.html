@@ -10,6 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -127,6 +129,22 @@
   .chart-card h3{font-family:'Oswald',sans-serif;font-size:14.5px;font-weight:600;color:var(--navy);margin:0 0 14px;}
   .chart-wrap{position:relative;height:260px;}
   .chart-card.full{grid-column:1 / -1;}
+
+  .map-card{background:var(--card);border:1px solid var(--line);border-radius:var(--card-radius);box-shadow:var(--card-shadow);padding:18px;margin-bottom:22px;overflow:hidden;}
+  .map-card-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;}
+  .map-card-head h3{font-family:'Oswald',sans-serif;font-size:14.5px;font-weight:600;color:var(--navy);margin:0;}
+  .map-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--ink-soft);}
+  .map-legend span{display:inline-flex;align-items:center;gap:5px;}
+  .map-legend .dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0;}
+  .map-wrap{position:relative;height:420px;border-radius:8px;overflow:hidden;max-width:100%;}
+  @media(min-width:900px){.map-wrap{height:560px;}}
+  .leaflet-popup-content{font-family:'Inter',sans-serif;font-size:12.5px;min-width:180px;}
+  .map-popup-title{font-family:'Oswald',sans-serif;font-weight:600;font-size:13px;color:var(--navy);margin:0 0 4px;}
+  .map-popup-status{display:inline-block;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;margin-bottom:6px;}
+  .map-popup-chips{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;}
+  .map-popup-chip{background:#EEF1F7;color:var(--navy);font-size:10.5px;padding:2px 7px;border-radius:20px;}
+  .map-popup-link{display:block;margin-top:6px;color:var(--navy);font-weight:600;font-size:12px;text-decoration:underline;cursor:pointer;}
+  .map-empty-note{font-size:11.5px;color:var(--ink-faint);margin-top:10px;}
 
   .table-card{background:var(--card);border:1px solid var(--line);border-radius:var(--card-radius);box-shadow:var(--card-shadow);padding:18px;overflow-x:auto;}
   .table-card h3{font-family:'Oswald',sans-serif;font-size:14.5px;font-weight:600;color:var(--navy);margin:0;}
@@ -411,6 +429,20 @@
       </div>
     </div>
 
+    <div class="map-card">
+      <div class="map-card-head">
+        <h3>Peta lokasi &amp; zona risiko</h3>
+        <div class="map-legend">
+          <span><i class="dot" style="background:#1E7B34;"></i> Layak</span>
+          <span><i class="dot" style="background:#E1372C;"></i> Ada alat, tidak layak</span>
+          <span><i class="dot" style="background:#5B6270;"></i> Tanpa alat</span>
+          <span><i class="dot" style="background:#E1372C;opacity:.35;"></i> Zona risiko (bubble)</span>
+        </div>
+      </div>
+      <div class="map-wrap" id="mapWrap"></div>
+      <p class="map-empty-note" id="mapEmptyNote" style="display:none;">Belum ada data dengan titik lokasi GPS pada tampilan filter saat ini.</p>
+    </div>
+
     <div class="table-card">
       <div class="table-card-head">
         <h3>Data pendataan</h3>
@@ -640,6 +672,7 @@ function applyFilters(){
 
   renderStats(filtered);
   renderCharts(filtered);
+  renderMap(filtered, kec);
   renderTable(filtered);
 }
 
@@ -660,6 +693,136 @@ function countBy(data, key){
 }
 
 const PALETTE = ['#122444','#E1372C','#F2B705','#5B6270','#1E7B34','#8C6EAB','#2F7DB0','#B85C2E','#C7CBD4'];
+
+/* ===================== PETA LOKASI ===================== */
+
+// Koordinat kira-kira titik tengah tiap kecamatan — dipakai untuk zoom peta
+// dan posisi bubble zona risiko. Tidak presisi ke batas wilayah asli (kita
+// tidak pakai data batas wilayah), tapi cukup untuk kebutuhan navigasi peta.
+const KECAMATAN_CENTER = {
+  'Buleleng':      [-8.112, 115.089],
+  'Sawan':         [-8.128, 115.162],
+  'Kubutambahan':  [-8.114, 115.204],
+  'Tejakula':      [-8.130, 115.267],
+  'Sukasada':      [-8.166, 115.103],
+  'Banjar':        [-8.148, 114.980],
+  'Seririt':       [-8.146, 114.947],
+  'Busungbiu':     [-8.230, 114.940],
+  'Gerokgak':      [-8.181, 114.769]
+};
+const BULELENG_CENTER = [-8.145, 115.070];
+const BULELENG_ZOOM = 10;
+const KECAMATAN_ZOOM = 13;
+
+let sipadamMap = null;
+let mapMarkerLayer = null;
+let mapBubbleLayer = null;
+
+function initMap(){
+  if(sipadamMap) return;
+  const wrap = document.getElementById('mapWrap');
+  if(!wrap || typeof L === 'undefined') return;
+  sipadamMap = L.map(wrap, { scrollWheelZoom:false }).setView(BULELENG_CENTER, BULELENG_ZOOM);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(sipadamMap);
+  mapMarkerLayer = L.layerGroup().addTo(sipadamMap);
+  mapBubbleLayer = L.layerGroup().addTo(sipadamMap);
+}
+
+function markerColorFor(r){
+  if(r.MemilikiAlatProteksi === 'Tidak') return '#5B6270';
+  if(r.StatusInstansi === 'Tidak Layak') return '#E1372C';
+  if(r.StatusInstansi === 'Layak') return '#1E7B34';
+  return '#9AA0AC';
+}
+
+function escHtml(v){
+  return String(v==null?'':v).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function popupHtmlFor(r, idx){
+  const jenisAlat = (r.JenisAlatPemadam || '').split(',').map(s=>s.trim()).filter(Boolean);
+  let badgeStyle = 'background:#EEF1F7;color:var(--navy);';
+  if(r.StatusInstansi==='Layak') badgeStyle = 'background:var(--ok-bg);color:var(--ok);';
+  else if(r.StatusInstansi==='Tidak Layak') badgeStyle = 'background:var(--bad-bg);color:var(--bad);';
+  return `
+    <p class="map-popup-title">${escHtml(r.NamaInstansi||'—')}</p>
+    <span class="map-popup-status" style="${badgeStyle}">${escHtml(r.StatusInstansi||'—')}</span>
+    <div>${escHtml(r.JenisGedung||'—')} &middot; ${escHtml(r.Kecamatan||'—')}</div>
+    ${jenisAlat.length ? `<div class="map-popup-chips">${jenisAlat.map(j=>`<span class="map-popup-chip">${escHtml(j)}</span>`).join('')}</div>` : '<div style="margin-top:6px;color:var(--ink-faint);">Tidak memiliki alat proteksi</div>'}
+    <a class="map-popup-link" onclick="showDetail(mapPopupData[${idx}])">Lihat detail lengkap &rarr;</a>
+  `;
+}
+
+let mapPopupData = [];
+
+function renderMap(data, kecFilter){
+  initMap();
+  if(!sipadamMap) return;
+
+  mapMarkerLayer.clearLayers();
+  mapBubbleLayer.clearLayers();
+  mapPopupData = [];
+
+  const withCoords = data.filter(r => r.Latitude && r.Longitude && !isNaN(parseFloat(r.Latitude)) && !isNaN(parseFloat(r.Longitude)));
+
+  withCoords.forEach(r=>{
+    const lat = parseFloat(r.Latitude), lng = parseFloat(r.Longitude);
+    const idx = mapPopupData.length;
+    mapPopupData.push(r);
+    const marker = L.circleMarker([lat,lng], {
+      radius: 8,
+      color: '#fff',
+      weight: 2,
+      fillColor: markerColorFor(r),
+      fillOpacity: 0.9
+    });
+    marker.bindPopup(popupHtmlFor(r, idx));
+    marker.addTo(mapMarkerLayer);
+  });
+
+  document.getElementById('mapEmptyNote').style.display = withCoords.length ? 'none' : 'block';
+
+  // Bubble zona risiko per kecamatan: makin besar & pekat merahnya, makin
+  // tinggi persentase instansi TANPA alat proteksi di kecamatan itu.
+  const byKec = {};
+  data.forEach(r=>{
+    if(!r.Kecamatan) return;
+    if(!byKec[r.Kecamatan]) byKec[r.Kecamatan] = { total:0, tanpaAlat:0 };
+    byKec[r.Kecamatan].total++;
+    if(r.MemilikiAlatProteksi === 'Tidak') byKec[r.Kecamatan].tanpaAlat++;
+  });
+  Object.keys(byKec).forEach(kecName=>{
+    const center = KECAMATAN_CENTER[kecName];
+    if(!center) return;
+    const pct = byKec[kecName].tanpaAlat / byKec[kecName].total;
+    if(pct <= 0) return;
+    const radiusMeters = 1200 + pct * 3500;
+    L.circle(center, {
+      radius: radiusMeters,
+      color: '#E1372C',
+      weight: 1,
+      fillColor: '#E1372C',
+      fillOpacity: 0.12 + pct * 0.3,
+      opacity: 0.25
+    }).bindTooltip(`${kecName}: ${Math.round(pct*100)}% tanpa alat proteksi`).addTo(mapBubbleLayer);
+  });
+
+  // Zoom mengikuti filter kecamatan yang aktif
+  if(kecFilter && KECAMATAN_CENTER[kecFilter]){
+    sipadamMap.flyTo(KECAMATAN_CENTER[kecFilter], KECAMATAN_ZOOM, { duration: 0.6 });
+  } else {
+    sipadamMap.flyTo(BULELENG_CENTER, BULELENG_ZOOM, { duration: 0.6 });
+  }
+
+  // Leaflet perlu tahu ukuran kontainer sebenarnya, terutama kalau peta
+  // sempat disembunyikan (display:none) lalu ditampilkan lagi.
+  setTimeout(()=>{ if(sipadamMap) sipadamMap.invalidateSize(); }, 200);
+}
+
+
 
 function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
 
