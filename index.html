@@ -145,6 +145,16 @@
   .map-popup-chip{background:#EEF1F7;color:var(--navy);font-size:10.5px;padding:2px 7px;border-radius:20px;}
   .map-popup-link{display:block;margin-top:6px;color:var(--navy);font-weight:600;font-size:12px;text-decoration:underline;cursor:pointer;}
   .map-empty-note{font-size:11.5px;color:var(--ink-faint);margin-top:10px;}
+  .map-method{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:10px;font-size:10.8px;color:var(--ink-soft);}
+  .map-method strong{color:var(--navy);font-weight:600;}
+  .map-zone-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--line);border-radius:999px;background:#fff;}
+  .map-zone-dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 9px;}
+  .zone-popup-title{font-family:'Oswald',sans-serif;font-weight:600;font-size:14px;color:var(--navy);margin:0 0 6px;}
+  .zone-popup-grid{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:11.5px;}
+  .zone-popup-grid .k{color:var(--ink-soft);}
+  .zone-popup-grid .v{font-weight:600;text-align:right;}
+  .zone-popup-note{margin-top:8px;font-size:10.5px;color:var(--ink-faint);line-height:1.4;}
+  .kec-label{background:rgba(255,255,255,.9);border:1px solid rgba(18,36,68,.12);box-shadow:0 1px 2px rgba(0,0,0,.08);border-radius:999px;padding:3px 8px;color:var(--navy);font-size:10.5px;font-weight:600;white-space:nowrap;}
 
   .table-card{background:var(--card);border:1px solid var(--line);border-radius:var(--card-radius);box-shadow:var(--card-shadow);padding:18px;overflow-x:auto;}
   .table-card h3{font-family:'Oswald',sans-serif;font-size:14.5px;font-weight:600;color:var(--navy);margin:0;}
@@ -433,14 +443,25 @@
       <div class="map-card-head">
         <h3>Peta lokasi &amp; zona risiko</h3>
         <div class="map-legend">
-          <span><i class="dot" style="background:#1E7B34;"></i> Layak</span>
-          <span><i class="dot" style="background:#E1372C;"></i> Ada alat, tidak layak</span>
+          <span><i class="dot" style="background:#2E8B57;"></i> Zona rendah</span>
+          <span><i class="dot" style="background:#F2B705;"></i> Zona sedang</span>
+          <span><i class="dot" style="background:#D32F2F;"></i> Zona tinggi</span>
+          <span><i class="dot" style="background:#A8AFBA;"></i> Data minim</span>
+          <span><i class="dot" style="background:#1E7B34;"></i> Titik layak</span>
+          <span><i class="dot" style="background:#E1372C;"></i> Titik tidak layak</span>
           <span><i class="dot" style="background:#5B6270;"></i> Tanpa alat</span>
-          <span><i class="dot" style="background:#E1372C;opacity:.35;"></i> Zona risiko (bubble)</span>
         </div>
       </div>
       <div class="map-wrap" id="mapWrap"></div>
+      <div class="map-method">
+        <span class="map-zone-chip"><i class="map-zone-dot" style="background:#2E8B57;"></i><strong>0–24%</strong> kesenjangan proteksi</span>
+        <span class="map-zone-chip"><i class="map-zone-dot" style="background:#F2B705;"></i><strong>25–49%</strong> kesenjangan proteksi</span>
+        <span class="map-zone-chip"><i class="map-zone-dot" style="background:#D32F2F;"></i><strong>≥50%</strong> kesenjangan proteksi</span>
+        <span class="map-zone-chip"><i class="map-zone-dot" style="background:#A8AFBA;"></i><strong>&lt;3</strong> assessment = data minim</span>
+        <span>Batas kecamatan: <strong>BIG RBI (edisi Juni 2026)</strong></span>
+      </div>
       <p class="map-empty-note" id="mapEmptyNote" style="display:none;">Belum ada data dengan titik lokasi GPS pada tampilan filter saat ini.</p>
+      <p class="map-empty-note" id="mapBoundaryNote" style="display:none;">Batas kecamatan belum berhasil dimuat dari layanan BIG. Titik assessment tetap ditampilkan; zona kecamatan tidak memakai bubble pengganti.</p>
     </div>
 
     <div class="table-card">
@@ -696,9 +717,8 @@ const PALETTE = ['#122444','#E1372C','#F2B705','#5B6270','#1E7B34','#8C6EAB','#2
 
 /* ===================== PETA LOKASI ===================== */
 
-// Koordinat kira-kira titik tengah tiap kecamatan — dipakai untuk zoom peta
-// dan posisi bubble zona risiko. Tidak presisi ke batas wilayah asli (kita
-// tidak pakai data batas wilayah), tapi cukup untuk kebutuhan navigasi peta.
+// Navigasi cadangan bila layanan batas administrasi sedang tidak tersedia.
+// Geometri kecamatan TIDAK dibuat dari titik tengah; sumber utama tetap BIG.
 const KECAMATAN_CENTER = {
   'Buleleng':      [-8.112, 115.089],
   'Sawan':         [-8.128, 115.162],
@@ -706,7 +726,7 @@ const KECAMATAN_CENTER = {
   'Tejakula':      [-8.130, 115.267],
   'Sukasada':      [-8.166, 115.103],
   'Banjar':        [-8.148, 114.980],
-  'Seririt':       [-8.146, 114.947],
+  'Seririt':      [-8.146, 114.947],
   'Busungbiu':     [-8.230, 114.940],
   'Gerokgak':      [-8.181, 114.769]
 };
@@ -714,21 +734,71 @@ const BULELENG_CENTER = [-8.145, 115.070];
 const BULELENG_ZOOM = 10;
 const KECAMATAN_ZOOM = 13;
 
+// Sumber geometri batas kecamatan nasional dari Badan Informasi Geospasial.
+// Layer resmi ini menggunakan EPSG:4326 dan menyediakan query GeoJSON.
+const BIG_KECAMATAN_GEOJSON_URL = 'https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0/query';
+
+// Catatan metodologi:
+// Permen PUPR 26/PRT/M/2008 mengatur persyaratan teknis sistem proteksi kebakaran.
+// Data SIPADAM saat ini belum menyimpan klasifikasi bahaya/fire-load/okupansi formal.
+// Maka warna polygon disebut "kesenjangan proteksi" (bukan klasifikasi hukum tingkat bahaya).
+// Skor operasional: 55% tanpa alat + 30% status tidak layak + 15% kekurangan sebaran keluarga sistem.
+// Untuk menghindari satu-dua record mengubah warna kecamatan secara berlebihan,
+// zona berstatus "data minim" bila < 3 assessment pada filter aktif.
+const RISK_LOW_MAX = 0.25;
+const RISK_MEDIUM_MAX = 0.50;
+const MIN_ASSESSMENTS_FOR_ZONE = 3;
+const RISK_COLORS = {
+  low:    { fill:'#2E8B57', border:'#216B42', label:'Rendah' },
+  medium: { fill:'#F2B705', border:'#C68F00', label:'Sedang' },
+  high:   { fill:'#D32F2F', border:'#A52323', label:'Tinggi' },
+  empty:  { fill:'#A8AFBA', border:'#7B8490', label:'Data minim' }
+};
+const CORE_SYSTEMS = [
+  {key:'APAR',      match:['APAR']},
+  {key:'HYDRANT',   match:['HYDRANT']},
+  {key:'DETECTION', match:['SMOKE DETECTOR','HEAT DETECTOR']},
+  {key:'ALARM',     match:['FIRE ALARM']},
+  {key:'SPRINKLER', match:['SPRINKLER']},
+  {key:'WATER',     match:['GROUND TANK / PENAMPUNG AIR SEJENIS']}
+];
+
 let sipadamMap = null;
 let mapMarkerLayer = null;
-let mapBubbleLayer = null;
+let mapBoundaryLayer = null;
+let mapLabelLayer = null;
+let mapPopupData = [];
+let kecBoundaryGeoJSON = null;
+let kecBoundaryPromise = null;
+let mapRenderVersion = 0;
+
+function normalizeKecName(v){
+  return String(v||'').toLowerCase().replace(/\s+/g,'').replace(/[^a-z0-9]/g,'');
+}
+
+function canonicalKecName(v){
+  const key = normalizeKecName(v);
+  const found = Object.keys(KECAMATAN_CENTER).find(k=>normalizeKecName(k)===key);
+  return found || String(v||'').trim();
+}
 
 function initMap(){
   if(sipadamMap) return;
   const wrap = document.getElementById('mapWrap');
   if(!wrap || typeof L === 'undefined') return;
-  sipadamMap = L.map(wrap, { scrollWheelZoom:false }).setView(BULELENG_CENTER, BULELENG_ZOOM);
+  sipadamMap = L.map(wrap, {
+    scrollWheelZoom:false,
+    zoomControl:true,
+    minZoom:9,
+    maxZoom:18
+  }).setView(BULELENG_CENTER, BULELENG_ZOOM);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18,
-    attribution: '&copy; OpenStreetMap contributors'
+    maxZoom:18,
+    attribution:'&copy; OpenStreetMap contributors'
   }).addTo(sipadamMap);
+  mapBoundaryLayer = L.layerGroup().addTo(sipadamMap);
+  mapLabelLayer = L.layerGroup().addTo(sipadamMap);
   mapMarkerLayer = L.layerGroup().addTo(sipadamMap);
-  mapBubbleLayer = L.layerGroup().addTo(sipadamMap);
 }
 
 function markerColorFor(r){
@@ -742,83 +812,264 @@ function escHtml(v){
   return String(v==null?'':v).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function getAlatList(r){
+  return String(r.JenisAlatPemadam||'').split(',').map(s=>s.trim()).filter(Boolean);
+}
+
 function popupHtmlFor(r, idx){
-  const jenisAlat = (r.JenisAlatPemadam || '').split(',').map(s=>s.trim()).filter(Boolean);
+  const jenisAlat = getAlatList(r);
   let badgeStyle = 'background:#EEF1F7;color:var(--navy);';
   if(r.StatusInstansi==='Layak') badgeStyle = 'background:var(--ok-bg);color:var(--ok);';
   else if(r.StatusInstansi==='Tidak Layak') badgeStyle = 'background:var(--bad-bg);color:var(--bad);';
+  const alatLabel = r.MemilikiAlatProteksi === 'Tidak' ? 'Tidak memiliki alat' : (jenisAlat.length ? `${jenisAlat.length} jenis alat` : 'Belum dirinci');
   return `
     <p class="map-popup-title">${escHtml(r.NamaInstansi||'—')}</p>
     <span class="map-popup-status" style="${badgeStyle}">${escHtml(r.StatusInstansi||'—')}</span>
     <div>${escHtml(r.JenisGedung||'—')} &middot; ${escHtml(r.Kecamatan||'—')}</div>
+    <div style="margin-top:6px;color:#5B6270;"><strong>Proteksi:</strong> ${escHtml(alatLabel)}</div>
     ${jenisAlat.length ? `<div class="map-popup-chips">${jenisAlat.map(j=>`<span class="map-popup-chip">${escHtml(j)}</span>`).join('')}</div>` : '<div style="margin-top:6px;color:var(--ink-faint);">Tidak memiliki alat proteksi</div>'}
     <a class="map-popup-link" onclick="showDetail(mapPopupData[${idx}])">Lihat detail lengkap &rarr;</a>
   `;
 }
 
-let mapPopupData = [];
+function zoneMetricsForData(data){
+  const byKec = {};
+  data.forEach(r=>{
+    const raw = canonicalKecName(r.Kecamatan);
+    if(!raw || !KECAMATAN_CENTER[raw]) return;
+    const key = raw;
+    if(!byKec[key]) byKec[key] = {
+      total:0,
+      noEquip:0,
+      notFit:0,
+      families:new Set()
+    };
+    const m = byKec[key];
+    m.total++;
+    if(String(r.MemilikiAlatProteksi||'').trim()==='Tidak') m.noEquip++;
+    if(String(r.StatusInstansi||'').trim()==='Tidak Layak') m.notFit++;
+    const alat = getAlatList(r).map(x=>x.toUpperCase());
+    CORE_SYSTEMS.forEach(sys=>{
+      if(sys.match.some(token=>alat.includes(token))) m.families.add(sys.key);
+    });
+  });
 
-function renderMap(data, kecFilter){
-  initMap();
+  Object.keys(byKec).forEach(kec=>{
+    const m = byKec[kec];
+    const noEquipRate = m.total ? m.noEquip/m.total : 1;
+    const notFitRate = m.total ? m.notFit/m.total : 1;
+    const breadth = m.families.size / CORE_SYSTEMS.length;
+    const spreadGap = 1 - breadth;
+    m.score = (0.55*noEquipRate) + (0.30*notFitRate) + (0.15*spreadGap);
+    m.noEquipRate = noEquipRate;
+    m.notFitRate = notFitRate;
+    m.breadth = breadth;
+    if(m.total < MIN_ASSESSMENTS_FOR_ZONE){
+      m.level='empty';
+    }else if(m.score < RISK_LOW_MAX){
+      m.level='low';
+    }else if(m.score < RISK_MEDIUM_MAX){
+      m.level='medium';
+    }else{
+      m.level='high';
+    }
+    m.label = RISK_COLORS[m.level].label;
+  });
+  return byKec;
+}
+
+function zonePopupHtml(kecName, m){
+  const c = RISK_COLORS[m.level];
+  const confidence = m.total < MIN_ASSESSMENTS_FOR_ZONE ? 'Data masih minim untuk mewarnai zona secara representatif.' : 'Indeks ini adalah indikator kesenjangan proteksi berbasis data assessment aktif, bukan klasifikasi hukum tingkat bahaya kebakaran.';
+  return `
+    <p class="zone-popup-title">Kecamatan ${escHtml(kecName)}</p>
+    <div style="display:inline-block;background:${c.fill};color:${m.level==='medium'?'#3d2c00':'#fff'};padding:3px 9px;border-radius:999px;font-size:10.5px;font-weight:700;margin-bottom:8px;">${escHtml(c.label)}</div>
+    <div class="zone-popup-grid">
+      <span class="k">Assessment</span><span class="v">${m.total}</span>
+      <span class="k">Tanpa alat</span><span class="v">${Math.round(m.noEquipRate*100)}%</span>
+      <span class="k">Tidak layak</span><span class="v">${Math.round(m.notFitRate*100)}%</span>
+      <span class="k">Keluarga sistem teramati</span><span class="v">${m.families.size}/${CORE_SYSTEMS.length}</span>
+      <span class="k">Indeks kesenjangan</span><span class="v">${Math.round(m.score*100)}%</span>
+    </div>
+    <div class="zone-popup-note">${escHtml(confidence)}</div>
+  `;
+}
+
+async function loadKecamatanBoundaries(){
+  if(kecBoundaryGeoJSON) return kecBoundaryGeoJSON;
+  if(kecBoundaryPromise) return kecBoundaryPromise;
+  const params = new URLSearchParams({
+    where:"wadmkk='Buleleng'",
+    outFields:'wadmkc,wadmkk,wadmpr,kdcpum,kdbbps',
+    returnGeometry:'true',
+    outSR:'4326',
+    f:'geojson'
+  });
+  const url = BIG_KECAMATAN_GEOJSON_URL + '?' + params.toString();
+  kecBoundaryPromise = fetch(url, {cache:'force-cache'})
+    .then(res=>{
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      return res.json();
+    })
+    .then(gj=>{
+      if(!gj || !Array.isArray(gj.features) || !gj.features.length) throw new Error('GeoJSON kecamatan kosong');
+      kecBoundaryGeoJSON = gj;
+      return gj;
+    })
+    .catch(err=>{
+      console.warn('Batas kecamatan BIG gagal dimuat:', err);
+      kecBoundaryPromise = null;
+      throw err;
+    });
+  return kecBoundaryPromise;
+}
+
+function clearBoundaryLayers(){
+  if(mapBoundaryLayer) mapBoundaryLayer.clearLayers();
+  if(mapLabelLayer) mapLabelLayer.clearLayers();
+}
+
+function addBoundaryLabels(){
+  if(!mapLabelLayer || !kecBoundaryGeoJSON) return;
+  kecBoundaryGeoJSON.features.forEach(feature=>{
+    const p = feature.properties || {};
+    const name = canonicalKecName(p.wadmkc || p.WADMKC || p.kecamatan || '');
+    if(!name || !KECAMATAN_CENTER[name]) return;
+    const center = KECAMATAN_CENTER[name];
+    L.marker(center, {
+      interactive:false,
+      icon:L.divIcon({className:'', html:`<div class="kec-label">${escHtml(name)}</div>`, iconSize:null, iconAnchor:null})
+    }).addTo(mapLabelLayer);
+  });
+}
+
+function zoomMapToSelection(kecFilter){
   if(!sipadamMap) return;
+  if(kecFilter && mapBoundaryLayer){
+    let selected = null;
+    mapBoundaryLayer.eachLayer(layer=>{
+      if(layer.feature){
+        const p = layer.feature.properties || {};
+        const name = canonicalKecName(p.wadmkc || p.WADMKC || p.kecamatan || '');
+        if(normalizeKecName(name)===normalizeKecName(kecFilter)) selected = layer;
+      }
+    });
+    if(selected && selected.getBounds && selected.getBounds().isValid()){
+      sipadamMap.flyToBounds(selected.getBounds(), {padding:[28,28], maxZoom:14, duration:0.7});
+      return;
+    }
+    if(KECAMATAN_CENTER[kecFilter]){
+      sipadamMap.flyTo(KECAMATAN_CENTER[kecFilter], KECAMATAN_ZOOM, {duration:0.6});
+      return;
+    }
+  }
+  const allBounds = mapBoundaryLayer && mapBoundaryLayer.getBounds ? mapBoundaryLayer.getBounds() : null;
+  if(allBounds && allBounds.isValid()){
+    sipadamMap.fitBounds(allBounds, {padding:[20,20], maxZoom:11});
+  }else{
+    sipadamMap.flyTo(BULELENG_CENTER, BULELENG_ZOOM, {duration:0.6});
+  }
+}
 
+function renderBoundaryZones(data, kecFilter){
+  if(!sipadamMap || !kecBoundaryGeoJSON) return;
+  clearBoundaryLayers();
+  const metrics = zoneMetricsForData(data);
+  const boundaryCount = {};
+
+  mapBoundaryLayer = L.geoJSON(kecBoundaryGeoJSON, {
+    style:(feature)=>{
+      const p = feature.properties || {};
+      const kec = canonicalKecName(p.wadmkc || p.WADMKC || p.kecamatan || '');
+      const m = metrics[kec] || {total:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty',label:'Data minim'};
+      const c = RISK_COLORS[m.level] || RISK_COLORS.empty;
+      const selected = kecFilter && normalizeKecName(kec)===normalizeKecName(kecFilter);
+      return {
+        color:selected ? '#122444' : c.border,
+        weight:selected ? 2.6 : 1.2,
+        opacity:1,
+        fillColor:c.fill,
+        fillOpacity:selected ? 0.40 : (m.level==='empty' ? 0.16 : 0.32)
+      };
+    },
+    onEachFeature:(feature,layer)=>{
+      const p = feature.properties || {};
+      const kec = canonicalKecName(p.wadmkc || p.WADMKC || p.kecamatan || '');
+      boundaryCount[kec] = (boundaryCount[kec]||0)+1;
+      const m = metrics[kec] || {total:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty'};
+      layer.bindPopup(zonePopupHtml(kec, m));
+      layer.bindTooltip(`Kecamatan ${escHtml(kec)} · ${m.level==='empty' ? 'data minim' : 'indeks '+Math.round(m.score*100)+'%'}`, {sticky:true, direction:'top'});
+      layer.on({
+        mouseover:()=>{
+          layer.setStyle({weight:3});
+          if(layer.bringToFront) layer.bringToFront();
+        },
+        mouseout:()=>{
+          const c = RISK_COLORS[m.level] || RISK_COLORS.empty;
+          const selected = kecFilter && normalizeKecName(kec)===normalizeKecName(kecFilter);
+          layer.setStyle({weight:selected?2.6:1.2,color:selected?'#122444':c.border});
+        },
+        click:()=>{
+          if(layer.getBounds && layer.getBounds().isValid()) sipadamMap.flyToBounds(layer.getBounds(), {padding:[28,28],maxZoom:14,duration:0.6});
+        }
+      });
+    }
+  }).addTo(sipadamMap);
+
+  // Label nama kecamatan diletakkan di atas polygon, tetapi tidak dapat diklik.
+  addBoundaryLabels();
+  document.getElementById('mapBoundaryNote').style.display = 'none';
+  zoomMapToSelection(kecFilter);
+}
+
+function renderMarkers(data){
   mapMarkerLayer.clearLayers();
-  mapBubbleLayer.clearLayers();
   mapPopupData = [];
-
   const withCoords = data.filter(r => r.Latitude && r.Longitude && !isNaN(parseFloat(r.Latitude)) && !isNaN(parseFloat(r.Longitude)));
-
   withCoords.forEach(r=>{
     const lat = parseFloat(r.Latitude), lng = parseFloat(r.Longitude);
     const idx = mapPopupData.length;
     mapPopupData.push(r);
     const marker = L.circleMarker([lat,lng], {
-      radius: 8,
-      color: '#fff',
-      weight: 2,
-      fillColor: markerColorFor(r),
-      fillOpacity: 0.9
+      radius:7,
+      color:'#fff',
+      weight:2,
+      fillColor:markerColorFor(r),
+      fillOpacity:0.94,
+      riseOnHover:true
     });
+    marker.bindTooltip(escHtml(r.NamaInstansi||'Lokasi assessment'), {direction:'top', offset:[0,-5], opacity:0.92});
     marker.bindPopup(popupHtmlFor(r, idx));
     marker.addTo(mapMarkerLayer);
   });
-
   document.getElementById('mapEmptyNote').style.display = withCoords.length ? 'none' : 'block';
+}
 
-  // Bubble zona risiko per kecamatan: makin besar & pekat merahnya, makin
-  // tinggi persentase instansi TANPA alat proteksi di kecamatan itu.
-  const byKec = {};
-  data.forEach(r=>{
-    if(!r.Kecamatan) return;
-    if(!byKec[r.Kecamatan]) byKec[r.Kecamatan] = { total:0, tanpaAlat:0 };
-    byKec[r.Kecamatan].total++;
-    if(r.MemilikiAlatProteksi === 'Tidak') byKec[r.Kecamatan].tanpaAlat++;
-  });
-  Object.keys(byKec).forEach(kecName=>{
-    const center = KECAMATAN_CENTER[kecName];
-    if(!center) return;
-    const pct = byKec[kecName].tanpaAlat / byKec[kecName].total;
-    if(pct <= 0) return;
-    const radiusMeters = 1200 + pct * 3500;
-    L.circle(center, {
-      radius: radiusMeters,
-      color: '#E1372C',
-      weight: 1,
-      fillColor: '#E1372C',
-      fillOpacity: 0.12 + pct * 0.3,
-      opacity: 0.25
-    }).bindTooltip(`${kecName}: ${Math.round(pct*100)}% tanpa alat proteksi`).addTo(mapBubbleLayer);
-  });
+function renderMap(data, kecFilter){
+  initMap();
+  if(!sipadamMap) return;
+  const renderId = ++mapRenderVersion;
+  renderMarkers(data);
+  clearBoundaryLayers();
+  document.getElementById('mapBoundaryNote').style.display = 'none';
 
-  // Zoom mengikuti filter kecamatan yang aktif
-  if(kecFilter && KECAMATAN_CENTER[kecFilter]){
-    sipadamMap.flyTo(KECAMATAN_CENTER[kecFilter], KECAMATAN_ZOOM, { duration: 0.6 });
-  } else {
-    sipadamMap.flyTo(BULELENG_CENTER, BULELENG_ZOOM, { duration: 0.6 });
+  if(kecBoundaryGeoJSON){
+    renderBoundaryZones(data, kecFilter);
+  }else{
+    // Render titik dulu agar map langsung responsif sambil boundary diambil.
+    zoomMapToSelection(kecFilter);
+    loadKecamatanBoundaries().then(()=>{
+      if(renderId !== mapRenderVersion) return;
+      renderBoundaryZones(data, kecFilter);
+    }).catch(()=>{
+      if(renderId !== mapRenderVersion) return;
+      clearBoundaryLayers();
+      document.getElementById('mapBoundaryNote').style.display = 'block';
+      // Tanpa boundary asli, sengaja tidak menggambar bubble pengganti.
+      zoomMapToSelection(kecFilter);
+    });
   }
 
-  // Leaflet perlu tahu ukuran kontainer sebenarnya, terutama kalau peta
-  // sempat disembunyikan (display:none) lalu ditampilkan lagi.
   setTimeout(()=>{ if(sipadamMap) sipadamMap.invalidateSize(); }, 200);
 }
 
