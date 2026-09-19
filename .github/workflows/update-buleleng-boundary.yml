@@ -1,0 +1,109 @@
+name: Ambil Batas Kecamatan Buleleng dari BIG
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  download-boundary:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ambil GeoJSON resmi BIG 2026
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p data
+
+          URL="https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0/query"
+
+          curl --fail --silent --show-error --location \
+            --retry 3 \
+            --connect-timeout 20 \
+            --max-time 120 \
+            --get "$URL" \
+            --data-urlencode "where=kdpkab='5108' AND kdppum='51'" \
+            --data-urlencode "outFields=objectid,namobj,kdcpum,kdcbps,kdpkab,kdppum,wadmkc,wadmkk,wadmpr,luaswh" \
+            --data-urlencode "returnGeometry=true" \
+            --data-urlencode "outSR=4326" \
+            --data-urlencode "f=geojson" \
+            -o data/buleleng-kecamatan.geojson
+
+      - name: Validasi GeoJSON
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s data/buleleng-kecamatan.geojson
+
+          python - <<'PY'
+          import json
+
+          path = "data/buleleng-kecamatan.geojson"
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          if data.get("type") != "FeatureCollection":
+              raise SystemExit("ERROR: hasil bukan FeatureCollection")
+
+          features = data.get("features", [])
+
+          print("Jumlah feature:", len(features))
+
+          if len(features) != 9:
+              raise SystemExit(
+                  f"ERROR: jumlah kecamatan Buleleng tidak 9, tetapi {len(features)}"
+              )
+
+          expected = {
+              "Gerokgak",
+              "Seririt",
+              "Busungbiu",
+              "Banjar",
+              "Sukasada",
+              "Buleleng",
+              "Sawan",
+              "Kubutambahan",
+              "Tejakula",
+          }
+
+          actual = {
+              f.get("properties", {}).get("wadmkc")
+              for f in features
+          }
+
+          print("Kecamatan:", sorted(actual))
+
+          missing = expected - actual
+          if missing:
+              raise SystemExit(
+                  "ERROR: kecamatan yang hilang: " + ", ".join(sorted(missing))
+              )
+
+          print("VALIDASI BERHASIL")
+          PY
+
+      - name: Simpan ke repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/buleleng-kecamatan.geojson
+
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan GeoJSON."
+            exit 0
+          fi
+
+          git commit -m "Update batas kecamatan Buleleng dari BIG 2026"
+          git push
