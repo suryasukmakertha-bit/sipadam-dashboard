@@ -154,8 +154,11 @@
   .zone-popup-grid .k{color:var(--ink-soft);}
   .zone-popup-grid .v{font-weight:600;text-align:right;}
   .zone-popup-note{margin-top:8px;font-size:10.5px;color:var(--ink-faint);line-height:1.4;}
-  .kec-label{background:rgba(255,255,255,.9);border:1px solid rgba(18,36,68,.12);box-shadow:0 1px 2px rgba(0,0,0,.08);border-radius:999px;padding:3px 8px;color:var(--navy);font-size:10.5px;font-weight:600;white-space:nowrap;}
-  .leaflet-container .leaflet-interactive:focus{outline:none !important;}
+  .kec-label{display:inline-block;transform:translate(-50%,-50%);background:rgba(255,255,255,.94);border:1px solid rgba(18,36,68,.16);box-shadow:0 1px 3px rgba(0,0,0,.12);border-radius:999px;padding:4px 9px;color:var(--navy);font-size:10.5px;font-weight:700;white-space:nowrap;pointer-events:none;}
+  .leaflet-container .leaflet-interactive:focus,
+  .leaflet-container .leaflet-interactive:focus-visible,
+  .leaflet-container svg path.leaflet-interactive:focus,
+  .leaflet-container svg path.leaflet-interactive:focus-visible{outline:none !important;box-shadow:none !important;}
   .leaflet-container .leaflet-marker-icon:focus{outline:none !important;}
   .leaflet-tooltip.kec-tooltip{background:rgba(255,255,255,.96);border:1px solid rgba(18,36,68,.12);box-shadow:0 2px 8px rgba(0,0,0,.10);color:var(--navy);font-weight:600;}
 
@@ -462,10 +465,10 @@
         <span class="map-zone-chip"><i class="map-zone-dot" style="background:#F2B705;"></i><strong>25–49%</strong> kesenjangan proteksi</span>
         <span class="map-zone-chip"><i class="map-zone-dot" style="background:#D32F2F;"></i><strong>≥50%</strong> kesenjangan proteksi</span>
         <span class="map-zone-chip"><i class="map-zone-dot" style="background:#A8AFBA;"></i><strong>&lt;3</strong> assessment = data minim</span>
-        <span>Batas kecamatan: <strong>BIG RBI (edisi Juni 2026)</strong></span><span style="color:#5B6270;">Area abu-abu = kabupaten Bali lain sebagai konteks</span>
+        <span>Batas kecamatan: <strong>BIG RBI (edisi Juni 2026)</strong></span><span style="color:#5B6270;">Area abu-abu = kabupaten/kota Bali lain sebagai konteks; Buleleng = area analisis</span>
       </div>
       <p class="map-empty-note" id="mapEmptyNote" style="display:none;">Belum ada data dengan titik lokasi GPS pada tampilan filter saat ini.</p>
-      <p class="map-empty-note" id="mapBoundaryNote" style="display:none;">Batas kecamatan belum berhasil dimuat dari layanan BIG. Titik assessment tetap ditampilkan; zona kecamatan tidak memakai bubble pengganti.</p>
+      <p class="map-empty-note" id="mapBoundaryNote" style="display:none;">Batas kecamatan belum berhasil dimuat. Titik assessment tetap ditampilkan; zona kecamatan tidak memakai bubble pengganti.</p>
     </div>
 
     <div class="table-card">
@@ -746,7 +749,7 @@ const BIG_KECAMATAN_GEOJSON_URL = 'https://geoservices.big.go.id/rbi/rest/servic
 const BIG_KABKOTA_GEOJSON_URL = 'https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KABKOTA_AR/MapServer/0/query';
 
 /*
-  V2.1 — Indeks Kesenjangan Proteksi (indikator operasional, bukan klasifikasi
+  V2.1.1 — Perbaikan layer peta & sumber batas (indikator operasional, bukan klasifikasi
   hukum tingkat bahaya kebakaran).
 
   A = proporsi assessment TANPA alat proteksi
@@ -938,8 +941,8 @@ function loadKecamatanBoundaries(){
   if(kecBoundaryGeoJSON) return Promise.resolve(kecBoundaryGeoJSON);
   if(kecBoundaryPromise) return kecBoundaryPromise;
   const params = new URLSearchParams({
-    where:"WADMKK='Buleleng'",
-    outFields:'WADMKC,WADMKK,WADMPR,KDCPUM,KDBBPS,KDCBPS',
+    where:"kdpkab='5108'",
+    outFields:'wadmkc,wadmkk,wadmpr,kdcpum,kdbbps,kdcbps',
     returnGeometry:'true',
     outSR:'4326',
     f:'geojson'
@@ -960,8 +963,8 @@ function loadBaliRegencies(){
   if(baliRegencyGeoJSON) return Promise.resolve(baliRegencyGeoJSON);
   if(baliRegencyPromise) return baliRegencyPromise;
   const params = new URLSearchParams({
-    where:"WADMPR='Bali'",
-    outFields:'NAMOBJ,WADMKK,WADMPR,KDPKAB,KDBBPS',
+    where:"kdppum='51'",
+    outFields:'namobj,wadmkk,wadmpr,kdpkab,kdbbps',
     returnGeometry:'true',
     outSR:'4326',
     f:'geojson'
@@ -1048,6 +1051,7 @@ function featureBoundsArray(feature){
 }
 
 function bestInteriorPoint(feature){
+  // Cari titik representatif di dalam polygon, bukan koordinat manual/centroid mentah.
   const bounds=featureBoundsArray(feature);
   if(!bounds.isValid()) return null;
   const center=[(bounds.getWest()+bounds.getEast())/2,(bounds.getSouth()+bounds.getNorth())/2];
@@ -1081,13 +1085,13 @@ function addBaliContext(){
     interactive:false,
     style:(feature)=>{
       const n=regencyName(feature);
-      const isBuleleng=normalizeKecName(n)==='buleleng';
+      const isBuleleng=normalizeKecName(n).includes('buleleng');
       return {
-        color:isBuleleng?'#122444':'#8C95A3',
-        weight:isBuleleng?2.2:0.9,
-        opacity:isBuleleng?0.85:0.55,
+        color:isBuleleng?'#122444':'#6F7887',
+        weight:isBuleleng?2.6:1.0,
+        opacity:isBuleleng?0.95:0.62,
         fillColor:isBuleleng?'#FFFFFF':'#7B8490',
-        fillOpacity:isBuleleng?0.02:0.16
+        fillOpacity:isBuleleng?0.02:0.34
       };
     }
   }).addTo(mapContextLayer);
@@ -1155,13 +1159,14 @@ function renderBoundaryZones(data, kecFilter){
         weight:selected?2.0:1.0,
         opacity:0.92,
         fillColor:c.fill,
-        fillOpacity:selected?0.46:(m.level==='empty'?0.14:0.30)
+        fillOpacity:selected?0.50:(m.level==='empty'?0.20:0.38)
       };
     },
     onEachFeature:(feature,layer)=>{
       const kec=canonicalKecName(featureName(feature));
       const m=metrics[kec] || {total:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty',label:'Data minim'};
       layer.bindPopup(zonePopupHtml(kec,m));
+      layer.on('add',()=>{ if(layer._path) layer._path.removeAttribute('tabindex'); });
       layer.bindTooltip(`Kecamatan ${escHtml(kec)} · ${m.level==='empty' ? 'data minim' : 'indeks '+Math.round(m.score*100)+'%'}`, {
         sticky:true, direction:'top', className:'kec-tooltip'
       });
@@ -1177,8 +1182,10 @@ function renderBoundaryZones(data, kecFilter){
           layer.setStyle({weight:selected?2.0:1.0,color:selected?'#3A485E':c.border});
         },
         click:()=>{
-          // Popup dibuka tanpa mengubah layout/border fokus browser.
+          // Hindari focus outline/kotak hitam setelah polygon diklik.
+          if(layer._path && layer._path.blur) layer._path.blur();
           if(layer.getBounds && layer.getBounds().isValid()) sipadamMap.flyToBounds(layer.getBounds(), {padding:[32,32],maxZoom:14,duration:0.6});
+          requestAnimationFrame(()=>{ if(layer._path && layer._path.blur) layer._path.blur(); });
         }
       });
     }
