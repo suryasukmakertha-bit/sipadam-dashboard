@@ -23,6 +23,8 @@ jobs:
 
           TARGET_URL="https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0/query?where=kdpkab%3D%275108%27%20AND%20kdppum%3D%2751%27&outFields=*&returnGeometry=true&outSR=4326&f=geojson"
 
+          export TARGET_URL
+
           ENCODED_URL=$(python - <<'PY'
           import urllib.parse
           import os
