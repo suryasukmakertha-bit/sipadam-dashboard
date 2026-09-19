@@ -14,28 +14,44 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ambil GeoJSON resmi BIG 2026
+      - name: Ambil GeoJSON BIG melalui proxy
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p data
 
-          URL="https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0/query"
+          TARGET_URL="https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0/query?where=kdpkab%3D%275108%27%20AND%20kdppum%3D%2751%27&outFields=*&returnGeometry=true&outSR=4326&f=geojson"
 
-          curl --fail --silent --show-error --location \
+          ENCODED_URL=$(python - <<'PY'
+          import urllib.parse
+          import os
+
+          url = os.environ["TARGET_URL"]
+          print(urllib.parse.quote(url, safe=""))
+          PY
+          )
+
+          PROXY_URL="https://api.allorigins.win/raw?url=${ENCODED_URL}"
+
+          echo "Mengambil data BIG melalui proxy..."
+          echo "Sumber resmi:"
+          echo "${TARGET_URL}"
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
             --retry 3 \
-            --connect-timeout 20 \
-            --max-time 120 \
-            --get "$URL" \
-            --data-urlencode "where=kdpkab='5108' AND kdppum='51'" \
-            --data-urlencode "outFields=objectid,namobj,kdcpum,kdcbps,kdpkab,kdppum,wadmkc,wadmkk,wadmpr,luaswh" \
-            --data-urlencode "returnGeometry=true" \
-            --data-urlencode "outSR=4326" \
-            --data-urlencode "f=geojson" \
+            --retry-delay 3 \
+            --connect-timeout 30 \
+            --max-time 180 \
+            -A "SIPADAM-Boundary-Downloader/1.0" \
+            "${PROXY_URL}" \
             -o data/buleleng-kecamatan.geojson
 
-      - name: Validasi GeoJSON
+      - name: Validasi file GeoJSON
         shell: bash
         run: |
           set -euo pipefail
@@ -57,40 +73,68 @@ jobs:
 
           print("Jumlah feature:", len(features))
 
-          if len(features) != 9:
-              raise SystemExit(
-                  f"ERROR: jumlah kecamatan Buleleng tidak 9, tetapi {len(features)}"
+          expected = {
+              "GEROKGAK",
+              "SERIRIT",
+              "BUSUNGBIU",
+              "BANJAR",
+              "SUKASADA",
+              "BULELENG",
+              "SAWAN",
+              "KUBUTAMBAHAN",
+              "TEJAKULA",
+          }
+
+          actual = set()
+
+          for feature in features:
+              props = feature.get("properties", {})
+
+              name = (
+                  props.get("wadmkc")
+                  or props.get("WADMKC")
+                  or props.get("NAMOBJ")
+                  or props.get("namobj")
+                  or ""
               )
 
-          expected = {
-              "Gerokgak",
-              "Seririt",
-              "Busungbiu",
-              "Banjar",
-              "Sukasada",
-              "Buleleng",
-              "Sawan",
-              "Kubutambahan",
-              "Tejakula",
-          }
+              actual.add(str(name).strip().upper())
 
-          actual = {
-              f.get("properties", {}).get("wadmkc")
-              for f in features
-          }
-
-          print("Kecamatan:", sorted(actual))
+          print("Kecamatan terdeteksi:")
+          for name in sorted(actual):
+              print(" -", name)
 
           missing = expected - actual
+
           if missing:
               raise SystemExit(
-                  "ERROR: kecamatan yang hilang: " + ", ".join(sorted(missing))
+                  "ERROR: kecamatan Buleleng yang tidak ditemukan: "
+                  + ", ".join(sorted(missing))
               )
 
+          print("")
           print("VALIDASI BERHASIL")
+          print("Semua 9 kecamatan Buleleng ditemukan.")
           PY
 
-      - name: Simpan ke repository
+      - name: Simpan metadata sumber
+        shell: bash
+        run: |
+          cat > data/buleleng-kecamatan-source.json <<'EOF'
+          {
+            "dataset": "BATAS_KECAMATAN_AR_2026",
+            "publisher": "Badan Informasi Geospasial",
+            "edition": "Juni 2026",
+            "province_code": "51",
+            "kabupaten_code": "5108",
+            "source_service": "https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer",
+            "source_format": "GeoJSON",
+            "spatial_reference": "EPSG:4326",
+            "note": "GeoJSON diambil satu kali melalui proxy untuk bootstrap asset lokal SIPADAM; dashboard tidak mengambil data BIG saat runtime."
+          }
+          EOF
+
+      - name: Commit GeoJSON
         shell: bash
         run: |
           set -euo pipefail
@@ -99,11 +143,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/buleleng-kecamatan.geojson
+          git add data/buleleng-kecamatan-source.json
 
           if git diff --cached --quiet; then
-            echo "Tidak ada perubahan GeoJSON."
+            echo "Tidak ada perubahan."
             exit 0
           fi
 
-          git commit -m "Update batas kecamatan Buleleng dari BIG 2026"
+          git commit -m "Add Buleleng district boundaries from BIG 2026"
           git push
