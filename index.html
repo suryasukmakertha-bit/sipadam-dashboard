@@ -863,7 +863,7 @@ function initMap(){
   sipadamMap.getPane('regencyPane').style.zIndex = 250;
   sipadamMap.getPane('zonePane').style.zIndex = 350;
   sipadamMap.getPane('labelPane').style.zIndex = 500;
-  sipadamMap.getPane('markerPane').style.zIndex = 700;
+  sipadamMap.getPane('markerPane').style.zIndex = 600; // di bawah tooltip (650) dan popup (700)
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom:18,
