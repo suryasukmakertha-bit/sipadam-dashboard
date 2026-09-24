@@ -174,6 +174,12 @@
   }
   .search-wrap input:focus{border-color:var(--navy);background:#fff;outline:none;}
   table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px;}
+  .zone-sum-wrap{overflow-x:auto;margin-top:14px;}
+  table.zone-sum{min-width:560px;font-size:12.5px;}
+  .zone-sum th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--line-strong);}
+  .zone-sum td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  .zone-sum td.num,.zone-sum th:nth-child(n+2):nth-child(-n+6){text-align:right;}
+  .zone-sum .tier-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;}
   @media(max-width:480px){
     /* Judul, kotak pencarian, dan tombol unduh TIDAK ikut digeser lagi —
        hanya #tableArea (isi tabelnya saja) yang boleh scroll horizontal.
@@ -467,6 +473,7 @@
         <span class="map-zone-chip"><i class="map-zone-dot" style="background:#A8AFBA;"></i><strong>&lt;3</strong> assessment = data minim</span>
         <span>Batas kecamatan: <strong>BIG RBI (edisi Juni 2026)</strong></span><span style="color:#5B6270;">Area abu-abu = kabupaten/kota Bali lain sebagai konteks · batas/label dari BIG; Buleleng = area analisis</span>
       </div>
+      <div class="zone-sum-wrap"><table class="zone-sum"><thead><tr><th>Kecamatan</th><th>Data</th><th>Tanpa alat (A)</th><th>Tidak layak dari yang punya alat (B)</th><th>Sistem (C)</th><th>Indeks</th><th>Tingkat</th></tr></thead><tbody id="zoneSumBody"></tbody></table></div>
       <p class="map-empty-note" id="mapEmptyNote" style="display:none;">Belum ada data dengan titik lokasi GPS pada tampilan filter saat ini.</p>
       <p class="map-empty-note" id="mapBoundaryNote" style="display:none;">Batas kecamatan belum berhasil dimuat. Titik assessment tetap ditampilkan; zona kecamatan tidak memakai bubble pengganti.</p>
     </div>
@@ -515,6 +522,25 @@ function togglePasswordVisibility(){
    otomatis kalau halaman ditutup/di-refresh, harus login ulang. */
 let sessionToken = null;
 
+async function loginOnce(u, p){
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=>controller.abort(), 20000);
+  try{
+    const res = await fetch(ENDPOINT_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ action:'login', username:u, password:p }),
+      signal: controller.signal
+    });
+    const json = await res.json();
+    clearTimeout(timeoutId);
+    return { networkOk:true, json };
+  } catch(err){
+    clearTimeout(timeoutId);
+    return { networkOk:false, err };
+  }
+}
+
 async function doLogin(){
   const u = document.getElementById('loginUser').value.trim();
   const p = document.getElementById('loginPass').value;
@@ -532,24 +558,32 @@ async function doLogin(){
   const origText = btn.textContent;
   btn.textContent = 'Memeriksa…';
 
+  // Apps Script sering "lambat bangun": coba sampai 3x, timeout 20 detik, jeda membesar.
+  // Hanya gagal jaringan/timeout yang diulang; jawaban server (mis. password salah) langsung ditampilkan.
+  const maxAttempts = 3;
+  let result = null;
   try{
-    const res = await fetch(ENDPOINT_URL, {
-      method:'POST',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({ action:'login', username:u, password:p })
-    });
-    const json = await res.json();
-    if(json.ok && json.token){
-      sessionToken = json.token;
+    for(let attempt=1; attempt<=maxAttempts; attempt++){
+      btn.textContent = attempt===1 ? 'Memeriksa…' : `Mencoba lagi… (${attempt}/${maxAttempts})`;
+      result = await loginOnce(u, p);
+      if(result.networkOk) break;
+      if(attempt < maxAttempts) await sleep(1500 * attempt);
+    }
+    if(!result.networkOk){
+      errEl.textContent = 'Gagal terhubung ke server setelah beberapa kali percobaan. Periksa koneksi internet Anda, lalu coba lagi.';
+      errEl.style.display = 'block';
+    } else if(result.json && result.json.ok && result.json.token){
+      sessionToken = result.json.token;
       document.getElementById('loginScreen').style.display='none';
       document.getElementById('app').style.display='block';
+      await sleep(500); // beri waktu token baru "menyebar" sebelum dipakai
       loadData();
     } else {
-      errEl.textContent = json.error || 'Username atau password salah.';
+      errEl.textContent = (result.json && result.json.error) || 'Username atau password salah.';
       errEl.style.display = 'block';
     }
   } catch(err){
-    errEl.textContent = 'Gagal terhubung ke server. Periksa koneksi internet Anda.';
+    errEl.textContent = 'Terjadi kesalahan saat masuk. Coba lagi.';
     errEl.style.display = 'block';
   } finally {
     btn.disabled = false;
@@ -753,7 +787,7 @@ const BIG_KABKOTA_MAP_URL = 'https://geoservices.big.go.id/rbi/rest/services/BAT
   hukum tingkat bahaya kebakaran).
 
   A = proporsi assessment TANPA alat proteksi
-  B = proporsi assessment berstatus TIDAK LAYAK
+  B = proporsi TIDAK LAYAK di antara assessment yang PUNYA alat (V2.2, tidak tumpang tindih dengan A)
   C = kesenjangan keberagaman kelompok sistem proteksi teramati
 
   Kelompok yang dihitung saat ini: 8 pilihan pada form.
@@ -880,13 +914,20 @@ function zoneMetricsForData(data){
     if(!byKec[key]) byKec[key] = {
       total:0,
       noEquip:0,
-      notFit:0,
+      withEquip:0,
+      notFitEquip:0,
       families:new Set()
     };
     const m = byKec[key];
     m.total++;
-    if(String(r.MemilikiAlatProteksi||'').trim()==='Tidak') m.noEquip++;
-    if(String(r.StatusInstansi||'').trim()==='Tidak Layak') m.notFit++;
+    if(String(r.MemilikiAlatProteksi||'').trim()==='Tidak'){
+      m.noEquip++;
+    }else{
+      // V2.2: B hanya dihitung di antara yang PUNYA alat, supaya tidak
+      // dobel-hitung dengan A (tanpa alat otomatis berstatus Tidak Layak).
+      m.withEquip++;
+      if(String(r.StatusInstansi||'').trim()==='Tidak Layak') m.notFitEquip++;
+    }
     const alat = new Set(getAlatList(r));
     CORE_SYSTEMS.forEach(sys=>{
       if(sys.labels.some(token=>alat.has(normalizeAlatName(token)))) m.families.add(sys.key);
@@ -896,11 +937,11 @@ function zoneMetricsForData(data){
   Object.keys(byKec).forEach(kec=>{
     const m = byKec[kec];
     const noEquipRate = m.total ? m.noEquip/m.total : 1;
-    const notFitRate = m.total ? m.notFit/m.total : 1;
+    const notFitRate = m.withEquip ? m.notFitEquip/m.withEquip : 0;
     const breadth = CORE_SYSTEMS.length ? m.families.size / CORE_SYSTEMS.length : 0;
     const spreadGap = 1 - breadth;
 
-    // Indeks V2.1: 55% tanpa alat + 30% tidak layak + 15% kesenjangan
+    // Indeks V2.2: 55% tanpa alat (A) + 30% tidak layak di antara yang punya alat (B') + 15% kesenjangan
     // keberagaman kelompok sistem yang teramati.
     m.score = (0.55*noEquipRate) + (0.30*notFitRate) + (0.15*spreadGap);
     m.noEquipRate = noEquipRate;
@@ -930,13 +971,33 @@ function zonePopupHtml(kecName, m){
     <div style="display:inline-block;background:${c.fill};color:${m.level==='medium'?'#3d2c00':'#fff'};padding:3px 9px;border-radius:999px;font-size:10.5px;font-weight:700;margin-bottom:8px;">${escHtml(c.label)}</div>
     <div class="zone-popup-grid">
       <span class="k">Assessment</span><span class="v">${m.total}</span>
-      <span class="k">Tanpa alat</span><span class="v">${Math.round(m.noEquipRate*100)}%</span>
-      <span class="k">Tidak layak</span><span class="v">${Math.round(m.notFitRate*100)}%</span>
+      <span class="k">Tanpa alat (A)</span><span class="v">${m.noEquip||0} dari ${m.total} (${Math.round(m.noEquipRate*100)}%)</span>
+      <span class="k">Tidak layak, dari yang punya alat (B)</span><span class="v">${m.notFitEquip||0} dari ${m.withEquip||0} (${Math.round(m.notFitRate*100)}%)</span>
       <span class="k">Kelompok sistem teramati</span><span class="v">${m.families.size}/${CORE_SYSTEMS.length}</span>
       <span class="k">Indeks kesenjangan</span><span class="v">${Math.round(m.score*100)}%</span>
     </div>
     <div class="zone-popup-note">${escHtml(confidence)}</div>
   `;
+}
+
+function renderZoneSummary(data){
+  const body=document.getElementById('zoneSumBody');
+  if(!body) return;
+  const metrics=zoneMetricsForData(data);
+  const order={high:0,medium:1,low:2,empty:3};
+  const rows=Object.keys(KECAMATAN_CENTER).map(kec=>{
+    const m=metrics[kec] || {total:0,noEquip:0,withEquip:0,notFitEquip:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty'};
+    return {kec,m};
+  }).sort((a,b)=>(order[a.m.level]-order[b.m.level]) || (b.m.score-a.m.score));
+  body.innerHTML=rows.map(({kec,m})=>{
+    const c=RISK_COLORS[m.level];
+    const pct=v=>Math.round(v*100)+'%';
+    const empty=m.level==='empty';
+    const a=m.total?`${m.noEquip} / ${m.total} (${pct(m.noEquipRate)})`:'–';
+    const b=m.withEquip?`${m.notFitEquip} / ${m.withEquip} (${pct(m.notFitRate)})`:'–';
+    const cc=m.total?`${m.families.size}/${CORE_SYSTEMS.length}`:'–';
+    return `<tr><td><strong>${escHtml(kec)}</strong></td><td class="num">${m.total}</td><td class="num">${a}</td><td class="num">${b}</td><td class="num">${cc}</td><td class="num">${empty?'–':pct(m.score)}</td><td><i class="tier-dot" style="background:${c.fill};"></i>${escHtml(c.label)}</td></tr>`;
+  }).join('');
 }
 
 function featureName(feature){
@@ -1241,7 +1302,7 @@ function buildZoneDynamicLayer(data, kecFilter){
   return {
     id:0,
     source:{type:'mapLayer',mapLayerId:0},
-    definitionExpression:"KDPKAB='5108'",
+    definitionExpression:"KDPKAB='51.08'",
     drawingInfo:{
       renderer:renderer,
       transparency:0,
@@ -1378,6 +1439,7 @@ async function renderMap(data,kecFilter){
   activeMapKecFilter=kecFilter || '';
 
   renderMarkers(activeMapData);
+  renderZoneSummary(activeMapData);
   clearBoundaryLayers();
   clearContextLayer();
   const note=document.getElementById('mapBoundaryNote');
