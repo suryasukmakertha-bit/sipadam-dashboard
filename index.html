@@ -779,8 +779,6 @@ const KECAMATAN_ZOOM = 13;
 // Sumber batas resmi BIG. Kecamatan dipakai sebagai zona analisis; kabupaten/kota
 // Bali dipakai sebagai konteks visual agar Buleleng menonjol tanpa menghilangkan
 // orientasi terhadap Bali.
-const BIG_KECAMATAN_MAP_URL = 'https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer';
-const BIG_KABKOTA_MAP_URL = 'https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KABKOTA_AR/MapServer';
 
 /*
   V2.1.1 — Perbaikan layer peta & sumber batas (indikator operasional, bukan klasifikasi
@@ -820,10 +818,9 @@ let mapLabelLayer = null;
 let mapMarkerLayer = null;
 let mapPopupData = [];
 let mapRenderVersion = 0;
-let mapZoneRasterLayer = null;
-let mapContextRasterLayer = null;
-let activeZoneDynamicLayers = null;
-let activeContextDynamicLayers = null;
+let baliRegencyGeoJSON = null;
+let kecBoundaryGeoJSON = null;
+let baliGeoJsonPromise = null;
 let activeMapData = [];
 let activeMapKecFilter = '';
 
@@ -870,8 +867,11 @@ function initMap(){
     attribution:'&copy; OpenStreetMap contributors'
   }).addTo(sipadamMap);
   mapMarkerLayer = L.layerGroup().addTo(sipadamMap);
-  sipadamMap.on('moveend', refreshBigExportOverlays);
-  sipadamMap.on('resize', refreshBigExportOverlays);
+  // Konteks (kabupaten/kota Bali lain) & label kecamatan: layer grup vektor
+  // yang tetap ada sepanjang umur peta, isinya di-clear/isi ulang per render
+  // (beda dari mapBoundaryLayer/zona di bawah yang dibuat ulang tiap render).
+  mapContextLayer = L.layerGroup().addTo(sipadamMap);
+  mapLabelLayer = L.layerGroup().addTo(sipadamMap);
 }
 
 function markerColorFor(r){
@@ -1011,31 +1011,15 @@ function regencyName(feature){
 }
 
 function clearBoundaryLayers(){
-  if(mapZoneRasterLayer && sipadamMap){
-    try{ sipadamMap.removeLayer(mapZoneRasterLayer); }catch(e){}
-    mapZoneRasterLayer = null;
-  }
-  activeZoneDynamicLayers = null;
   if(mapBoundaryLayer && sipadamMap){
     try{ sipadamMap.removeLayer(mapBoundaryLayer); }catch(e){}
     mapBoundaryLayer = null;
   }
-  if(mapLabelLayer && sipadamMap){
-    try{ sipadamMap.removeLayer(mapLabelLayer); }catch(e){}
-    mapLabelLayer = null;
-  }
+  if(mapLabelLayer) mapLabelLayer.clearLayers();
 }
 
 function clearContextLayer(){
-  if(mapContextRasterLayer && sipadamMap){
-    try{ sipadamMap.removeLayer(mapContextRasterLayer); }catch(e){}
-    mapContextRasterLayer = null;
-  }
-  activeContextDynamicLayers = null;
-  if(mapContextLayer && sipadamMap){
-    try{ sipadamMap.removeLayer(mapContextLayer); }catch(e){}
-    mapContextLayer = null;
-  }
+  if(mapContextLayer) mapContextLayer.clearLayers();
 }
 
 function pointInRing(point, ring){
@@ -1240,195 +1224,31 @@ function renderMarkers(data){
   document.getElementById('mapEmptyNote').style.display=withCoords.length?'none':'block';
 }
 
-function hexToRgbArray(hex, alpha){
-  const h=String(hex||'').replace('#','');
-  const r=parseInt(h.substring(0,2),16)||0;
-  const g=parseInt(h.substring(2,4),16)||0;
-  const b=parseInt(h.substring(4,6),16)||0;
-  return [r,g,b,alpha==null?255:alpha];
-}
-
-function arcgisFillSymbol(fillHex, borderHex, fillAlpha, borderAlpha, weight){
-  return {
-    type:'esriSFS',
-    style:'esriSFSSolid',
-    color:hexToRgbArray(fillHex, fillAlpha),
-    outline:{
-      type:'esriSLS',
-      style:'esriSLSSolid',
-      color:hexToRgbArray(borderHex, borderAlpha),
-      width:weight || 1
-    }
-  };
-}
-
-function sqlQuote(v){ return "'"+String(v||'').replace(/'/g,"''")+"'"; }
-
-function buildZoneDynamicLayer(data, kecFilter){
-  const metrics=zoneMetricsForData(data);
-  const infos=[];
-  const names=Object.keys(KECAMATAN_CENTER);
-  names.forEach(kec=>{
-    const m=metrics[kec] || {total:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty'};
-    const c=RISK_COLORS[m.level] || RISK_COLORS.empty;
-    const selected=kecFilter && normalizeKecName(kec)===normalizeKecName(kecFilter);
-    const fillA = m.level==='empty' ? 38 : (m.level==='high' ? 125 : (m.level==='medium' ? 110 : 98));
-    const borderA = selected ? 255 : 220;
-    const weight = selected ? 2.8 : 1.35;
-    const variants=new Set([kec]);
-    if(kec==='Busungbiu') variants.add('Busung Biu');
-    variants.forEach(v=>{
-      infos.push({
-        value:v,
-        label:kec,
-        symbol:arcgisFillSymbol(c.fill,c.border,fillA,borderA,weight)
+// Batas kecamatan (vektor) dimuat sekali dari file statis di repo, lalu
+// dipakai berulang dari cache di memori (baliGeoJsonPromise) — tidak perlu
+// diminta ulang ke server tiap kali peta digeser/di-zoom, beda dari
+// pendekatan gambar PNG BIG /export yang sebelumnya dipakai di sini.
+function loadBaliGeoJson(){
+  if(!baliGeoJsonPromise){
+    baliGeoJsonPromise = fetch('data/bali-kecamatan.geojson')
+      .then(res=>{
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        return res.json();
+      })
+      .then(geo=>{
+        baliRegencyGeoJSON = geo;
+        kecBoundaryGeoJSON = {
+          type:'FeatureCollection',
+          features:(geo.features||[]).filter(f=>normalizeKecName(regencyName(f)).includes('buleleng'))
+        };
+        return geo;
+      })
+      .catch(err=>{
+        baliGeoJsonPromise = null; // izinkan percobaan ulang di render berikutnya
+        throw err;
       });
-    });
-  });
-  const renderer={
-    type:'uniqueValue',
-    field1:'WADMKC',
-    uniqueValueInfos:infos,
-    defaultSymbol:arcgisFillSymbol('#A8AFBA','#7B8490',36,140,1),
-    defaultLabel:'Data minim'
-  };
-  const labelSymbol={
-    type:'esriTS',
-    color:[18,36,68,255],
-    haloColor:[255,255,255,245],
-    haloSize:1.4,
-    font:{family:'Arial',size:9,weight:'bold'}
-  };
-  return {
-    id:0,
-    source:{type:'mapLayer',mapLayerId:0},
-    definitionExpression:"KDPKAB='51.08'",
-    drawingInfo:{
-      renderer:renderer,
-      transparency:0,
-      showLabels:true,
-      labelingInfo:[{
-        labelExpression:'[WADMKC]',
-        labelPlacement:'esriServerPolygonPlacementAlwaysHorizontal',
-        removeDuplicates:'true',
-        symbol:labelSymbol
-      }]
-    }
-  };
-}
-
-function buildContextDynamicLayer(){
-  return {
-    id:0,
-    source:{type:'mapLayer',mapLayerId:0},
-    definitionExpression:"KDPPUM='51'",
-    drawingInfo:{
-      renderer:{
-        type:'simple',
-        symbol:arcgisFillSymbol('#8B929D','#66707D',70,115,0.9)
-      },
-      transparency:0,
-      showLabels:false
-    }
-  };
-}
-
-function zonePopupFromFeature(feature, data){
-  const p=(feature && feature.properties)||{};
-  const name=canonicalKecName(p.WADMKC || p.wadmkc || p.NAMOBJ || p.namobj || p.nam_kec || '');
-  const metrics=zoneMetricsForData(data);
-  const m=metrics[name] || {total:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty'};
-  if(!name) return false;
-  return zonePopupHtml(name,m);
-}
-
-function currentExportSize(){
-  const size=sipadamMap ? sipadamMap.getSize() : {x:1024,y:520};
-  const width=Math.max(700,Math.min(1600,Math.round(size.x)));
-  const height=Math.max(420,Math.min(1000,Math.round(size.y)));
-  return {width,height};
-}
-
-function arcgisExportUrl(serviceUrl,dynamicLayers){
-  if(!sipadamMap || !dynamicLayers) return '';
-  const b=sipadamMap.getBounds();
-  const sw=b.getSouthWest(), ne=b.getNorthEast();
-  const size=currentExportSize();
-  const params=new URLSearchParams({
-    f:'image',
-    format:'png32',
-    transparent:'true',
-    bbox:[sw.lng,sw.lat,ne.lng,ne.lat].map(v=>Number(v).toFixed(7)).join(','),
-    bboxSR:'4326',
-    imageSR:'4326',
-    size:`${size.width},${size.height}`,
-    dpi:'96',
-    dynamicLayers:JSON.stringify(dynamicLayers),
-    cacheHint:'false'
-  });
-  return serviceUrl.replace(/\/$/,'')+'/export?'+params.toString();
-}
-
-function overlayBounds(){
-  const b=sipadamMap.getBounds();
-  return [[b.getSouth(),b.getWest()],[b.getNorth(),b.getEast()]];
-}
-
-function wireBigImageLayer(layer,label){
-  if(!layer) return layer;
-  layer.on('error',function(){
-    const note=document.getElementById('mapBoundaryNote');
-    if(note){
-      note.textContent=label+' gagal dimuat dari BIG. Cek koneksi internet/HTTPS atau buka ulang halaman.';
-      note.style.display='block';
-    }
-  });
-  layer.on('load',function(){
-    const note=document.getElementById('mapBoundaryNote');
-    if(note) note.style.display='none';
-  });
-  return layer;
-}
-
-function refreshBigExportOverlays(){
-  if(!sipadamMap) return;
-  const bounds=overlayBounds();
-  if(activeContextDynamicLayers){
-    const url=arcgisExportUrl(BIG_KABKOTA_MAP_URL,activeContextDynamicLayers);
-    if(mapContextRasterLayer){
-      mapContextRasterLayer.setBounds(bounds);
-      mapContextRasterLayer.setUrl(url);
-    }else if(url){
-      mapContextRasterLayer=wireBigImageLayer(L.imageOverlay(url,bounds,{pane:'regencyPane',opacity:0.82,interactive:false,alt:'Konteks kabupaten/kota Bali dari BIG'}).addTo(sipadamMap),'Layer konteks kabupaten/kota Bali');
-    }
   }
-  if(activeZoneDynamicLayers){
-    const url=arcgisExportUrl(BIG_KECAMATAN_MAP_URL,activeZoneDynamicLayers);
-    if(mapZoneRasterLayer){
-      mapZoneRasterLayer.setBounds(bounds);
-      mapZoneRasterLayer.setUrl(url);
-    }else if(url){
-      mapZoneRasterLayer=wireBigImageLayer(L.imageOverlay(url,bounds,{pane:'zonePane',opacity:1,interactive:false,alt:'Zona indeks kecamatan Buleleng dari BIG'}).addTo(sipadamMap),'Layer zona kecamatan Buleleng');
-    }
-  }
-}
-
-function renderContextServer(){
-  if(!sipadamMap || typeof L==='undefined') return false;
-  clearContextLayer();
-  activeContextDynamicLayers=[buildContextDynamicLayer()];
-  refreshBigExportOverlays();
-  return true;
-}
-
-function renderZonesServer(data,kecFilter){
-  if(!sipadamMap || typeof L==='undefined') return false;
-  clearBoundaryLayers();
-  activeZoneDynamicLayers=[buildZoneDynamicLayer(data,kecFilter)];
-  refreshBigExportOverlays();
-  const note=document.getElementById('mapBoundaryNote');
-  if(note) note.style.display='none';
-  return true;
+  return baliGeoJsonPromise;
 }
 
 async function renderMap(data,kecFilter){
@@ -1445,21 +1265,28 @@ async function renderMap(data,kecFilter){
   const note=document.getElementById('mapBoundaryNote');
   if(note) note.style.display='none';
 
-  // V2.1.2: gambar batas + warna + label dibuat oleh server BIG melalui /export.
-  // Browser hanya menerima PNG transparan, sehingga tidak bergantung pada CORS
-  // untuk mengambil GeoJSON. Marker SIPADAM tetap berada di pane paling atas.
-  const contextOk=renderContextServer();
-  const zoneOk=renderZonesServer(activeMapData,activeMapKecFilter);
-  if(!contextOk || !zoneOk){
-    if(note) note.style.display='block';
+  // V2.2: batas kecamatan dimuat sebagai GeoJSON vektor langsung di browser
+  // (data/bali-kecamatan.geojson, sumber BIG) — bentuknya presisi mengikuti
+  // peta dan tidak perlu menunggu render ulang dari server tiap kali di-zoom,
+  // beda dari pendekatan gambar PNG BIG /export yang dipakai sebelumnya.
+  try{
+    await loadBaliGeoJson();
+  }catch(err){
+    kecBoundaryGeoJSON = null; // gagal dimuat: peta tetap tampilkan titik lokasi
   }
   if(renderId!==mapRenderVersion) return;
 
-  zoomMapToSelection(activeMapKecFilter);
+  if(kecBoundaryGeoJSON && kecBoundaryGeoJSON.features && kecBoundaryGeoJSON.features.length){
+    addBaliContext();
+    renderBoundaryZones(activeMapData, activeMapKecFilter); // juga menyembunyikan note & zoom ke pilihan
+  } else {
+    if(note) note.style.display='block';
+    zoomMapToSelection(activeMapKecFilter);
+  }
+
   setTimeout(()=>{
     if(!sipadamMap) return;
     sipadamMap.invalidateSize();
-    refreshBigExportOverlays();
   },250);
 }
 
@@ -1777,6 +1604,7 @@ function showDetail(r){
               <div class="chips" style="margin-bottom:10px;">${(h.kelengkapan||[]).map(k=>`<span class="chip">${k}</span>`).join('') || '<span class="empty-mini">Tidak ada kelengkapan dipilih</span>'}</div>
               <table class="mini-table">
                 <tbody>
+                  ${h.kondisi ? `<tr><td>Kondisi</td><td colspan="2">${h.kondisi}</td></tr>` : ''}
                   ${h.selang ? `<tr><td>Selang</td><td>Ukuran: ${h.selang.ukuran||'—'}</td><td>Kondisi: ${h.selang.kondisi||'—'}</td></tr>` : ''}
                   ${h.nozzle ? `<tr><td>Nozzle</td><td>Baik: ${h.nozzle.jumlahBaik||0}</td><td>Tidak baik: ${h.nozzle.jumlahTidakBaik||0}</td></tr>` : ''}
                   ${h.kunci ? `<tr><td>Kunci</td><td>Baik: ${h.kunci.jumlahBaik||0}</td><td>Tidak baik: ${h.kunci.jumlahTidakBaik||0}</td></tr>` : ''}
@@ -1874,7 +1702,7 @@ const ALAT_OPTIONS_DASH = ['APAR','HYDRANT','SMOKE DETECTOR','HEAT DETECTOR','SP
 const RESCUE_OPTIONS_DASH = ['Tandu (Stretcher)','Bidai','Mitela','SCBA (Tabung Oksigen)','Jalur Evakuasi (Titik Kumpul)'];
 const APAR_TYPES_DASH = ['POWDER','CO2','FOAM','WATER'];
 const GENERIC_ALAT_DASH = ['SMOKE DETECTOR','HEAT DETECTOR','SPRINKLER','FIRE ALARM','FIRE BLANKET'];
-const HYDRANT_PARTS_DASH = ['Selang','Nozzle','Kunci'];
+const HYDRANT_PARTS_DASH = ['Kondisi','Selang','Nozzle','Kunci'];
 
 function escAttr(v){
   return String(v===undefined||v===null ? '' : v).replace(/"/g,'&quot;');
@@ -2164,6 +1992,18 @@ function startEditHydrant(){
       const subWrap = box.querySelector('.hyd-sub');
       const checked = Array.from(box.querySelectorAll('.hyd-part:checked')).map(el=>el.value);
       subWrap.innerHTML = '';
+      if(checked.includes('Kondisi')){
+        const d = document.createElement('div');
+        d.className='sub-detail-block';
+        d.innerHTML = `<div class="subfields">
+          <div><label>Kondisi</label><select class="hyd-kondisi-nilai">
+            <option value="">Pilih</option>
+            <option value="Baik" ${inst.kondisi==='Baik'?'selected':''}>Baik</option>
+            <option value="Tidak Baik" ${inst.kondisi==='Tidak Baik'?'selected':''}>Tidak Baik</option>
+          </select></div>
+        </div>`;
+        subWrap.appendChild(d);
+      }
       if(checked.includes('Selang')){
         const d = document.createElement('div');
         d.className='sub-detail-block';
@@ -2225,6 +2065,8 @@ function startEditHydrant(){
     const rowsOut = Array.from(wrap.children).map(box=>{
       const checked = Array.from(box.querySelectorAll('.hyd-part:checked')).map(el=>el.value);
       const entry = { kelengkapan: checked };
+      const kondisiNilai = box.querySelector('.hyd-kondisi-nilai');
+      if(kondisiNilai){ entry.kondisi = kondisiNilai.value; }
       const selangUk = box.querySelector('.hyd-selang-ukuran');
       if(selangUk){ entry.selang = { ukuran: selangUk.value.trim(), kondisi: box.querySelector('.hyd-selang-kondisi').value }; }
       const nozB = box.querySelector('.hyd-nozzle-baik');
@@ -2367,10 +2209,11 @@ function downloadDetailPdf(){
       sectionTitle('Kelengkapan HYDRANT');
       const body = [];
       hydrantList.forEach((h,i)=>{
+        if(h.kondisi) body.push(['HYDRANT #'+(i+1), 'Kondisi', h.kondisi]);
         if(h.selang) body.push(['HYDRANT #'+(i+1), 'Selang', 'Ukuran: '+(h.selang.ukuran||'—')+' / Kondisi: '+(h.selang.kondisi||'—')]);
         if(h.nozzle) body.push(['HYDRANT #'+(i+1), 'Nozzle', 'Baik: '+(h.nozzle.jumlahBaik||0)+' / Tidak baik: '+(h.nozzle.jumlahTidakBaik||0)]);
         if(h.kunci) body.push(['HYDRANT #'+(i+1), 'Kunci', 'Baik: '+(h.kunci.jumlahBaik||0)+' / Tidak baik: '+(h.kunci.jumlahTidakBaik||0)]);
-        if(!h.selang && !h.nozzle && !h.kunci) body.push(['HYDRANT #'+(i+1), '—', 'Tidak ada kelengkapan dipilih']);
+        if(!h.kondisi && !h.selang && !h.nozzle && !h.kunci) body.push(['HYDRANT #'+(i+1), '—', 'Tidak ada kelengkapan dipilih']);
       });
       detailTable(['Unit','Kelengkapan','Detail'], body);
     }
