@@ -1228,25 +1228,44 @@ function renderMarkers(data){
 // dipakai berulang dari cache di memori (baliGeoJsonPromise) — tidak perlu
 // diminta ulang ke server tiap kali peta digeser/di-zoom, beda dari
 // pendekatan gambar PNG BIG /export yang sebelumnya dipakai di sini.
+// Dua file GeoJSON terpisah, dua tingkat kedetailan:
+// - data/bali-kecamatan.geojson    -> 9 kabupaten/kota Bali, dipakai untuk
+//   konteks abu-abu (baliRegencyGeoJSON). Sudah benar sejak awal.
+// - data/buleleng-kecamatan.geojson -> 9 kecamatan Buleleng, diambil dari
+//   BIG lewat GitHub Actions (lihat .github/workflows/update-buleleng-boundary.yml),
+//   dipakai untuk zona berwarna + label + klik (kecBoundaryGeoJSON).
+// Kalau file kecamatan belum ada/gagal dimuat (mis. workflow belum pernah
+// dijalankan), peta tetap jalan tanpa zona berwarna — tidak mengunci halaman.
 function loadBaliGeoJson(){
   if(!baliGeoJsonPromise){
-    baliGeoJsonPromise = fetch('data/bali-kecamatan.geojson')
-      .then(res=>{
-        if(!res.ok) throw new Error('HTTP '+res.status);
-        return res.json();
-      })
-      .then(geo=>{
-        baliRegencyGeoJSON = geo;
-        kecBoundaryGeoJSON = {
-          type:'FeatureCollection',
-          features:(geo.features||[]).filter(f=>normalizeKecName(regencyName(f)).includes('buleleng'))
-        };
-        return geo;
-      })
-      .catch(err=>{
-        baliGeoJsonPromise = null; // izinkan percobaan ulang di render berikutnya
-        throw err;
-      });
+    const fetchJson = url => fetch(url).then(res=>{
+      if(!res.ok) throw new Error('HTTP '+res.status+' untuk '+url);
+      return res.json();
+    });
+
+    baliGeoJsonPromise = Promise.allSettled([
+      fetchJson('data/bali-kecamatan.geojson'),
+      fetchJson('data/buleleng-kecamatan.geojson')
+    ]).then(([regencyResult, kecResult])=>{
+      baliRegencyGeoJSON = (regencyResult.status==='fulfilled') ? regencyResult.value : null;
+      kecBoundaryGeoJSON = (kecResult.status==='fulfilled') ? kecResult.value : null;
+
+      if(regencyResult.status==='rejected'){
+        console.error('Gagal memuat data/bali-kecamatan.geojson:', regencyResult.reason);
+      }
+      if(kecResult.status==='rejected'){
+        console.error('Gagal memuat data/buleleng-kecamatan.geojson:', kecResult.reason);
+      }
+      // Kalau KEDUANYA gagal, lempar error supaya renderMap() tahu tidak ada
+      // apa-apa untuk ditampilkan (bukan cuma salah satu yang hilang).
+      if(!baliRegencyGeoJSON && !kecBoundaryGeoJSON){
+        throw new Error('Kedua file batas wilayah gagal dimuat.');
+      }
+      return true;
+    }).catch(err=>{
+      baliGeoJsonPromise = null; // izinkan percobaan ulang di render berikutnya
+      throw err;
+    });
   }
   return baliGeoJsonPromise;
 }
