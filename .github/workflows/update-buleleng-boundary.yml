@@ -14,12 +14,28 @@ jobs:
       - name: Checkout repository SIPADAM
         uses: actions/checkout@v4
 
-      - name: Download GeoJSON Bali
+      # Diambil LANGSUNG dari layanan resmi Badan Informasi Geospasial (BIG),
+      # server-ke-server lewat GitHub Actions — supaya tidak kena blokir CORS
+      # yang terjadi kalau diminta langsung dari browser dashboard.
+      #
+      # Field & filter di bawah (WADMKC, KDPKAB='51.08') sudah diverifikasi
+      # manual lewat query BIG pada sesi sebelumnya: hasilnya persis 9
+      # kecamatan Buleleng (Gerokgak, Seririt, Busungbiu, Banjar, Sukasada,
+      # Buleleng, Sawan, Kubutambahan, Tejakula) dengan nama field itu.
+      #
+      # Sumber sebelumnya (dmxsan/indonesia-admin-boundaries) TERNYATA hanya
+      # berisi batas level kabupaten/kota (9 fitur untuk seluruh Bali),
+      # bukan kecamatan — makanya run sebelumnya gagal dengan "Feature
+      # Buleleng: 0". Diganti total ke BIG sebagai sumber tunggal yang sudah
+      # terbukti benar.
+      - name: Download batas kecamatan Buleleng dari BIG
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p data
+
+          URL="https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0/query?where=KDPKAB%3D%2751.08%27&outFields=WADMKC%2CWADMKK%2CWADMPR%2CKDPKAB&returnGeometry=true&outSR=4326&f=geojson"
 
           curl \
             --fail \
@@ -27,130 +43,18 @@ jobs:
             --show-error \
             --location \
             --retry 3 \
-            --retry-delay 2 \
+            --retry-delay 5 \
             --connect-timeout 30 \
             --max-time 180 \
-            "https://raw.githubusercontent.com/dmxsan/indonesia-admin-boundaries/main/processed-data/02-provinces/with-districts/Bali.geojson" \
-            -o /tmp/Bali.geojson
+            "$URL" \
+            -o /tmp/buleleng-raw.geojson
 
-          test -s /tmp/Bali.geojson
+          test -s /tmp/buleleng-raw.geojson
 
           echo "Ukuran file:"
-          ls -lh /tmp/Bali.geojson
+          ls -lh /tmp/buleleng-raw.geojson
 
-      - name: Ambil hanya Kecamatan Kabupaten Buleleng
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import json
-
-          src = "/tmp/Bali.geojson"
-          dst = "data/buleleng-kecamatan.geojson"
-
-          expected = {
-              "GEROKGAK",
-              "SERIRIT",
-              "BUSUNGBIU",
-              "BANJAR",
-              "SUKASADA",
-              "BULELENG",
-              "SAWAN",
-              "KUBUTAMBAHAN",
-              "TEJAKULA",
-          }
-
-          with open(src, "r", encoding="utf-8") as f:
-              data = json.load(f)
-
-          features = data.get("features", [])
-
-          print("Total feature Bali:", len(features))
-
-          selected = []
-
-          for feature in features:
-              props = feature.get("properties", {})
-
-              values = {
-                  str(k).upper(): str(v).upper()
-                  for k, v in props.items()
-                  if v is not None
-              }
-
-              combined = " | ".join(values.values())
-
-              district_name = None
-
-              for key in (
-                  "DISTRICT",
-                  "DISTRICT_NAME",
-                  "KECAMATAN",
-                  "KECAMATAN_NAME",
-                  "WADMKC",
-                  "NAMOBJ",
-                  "NAME",
-                  "NAME_3",
-                  "NAME_2",
-              ):
-                  if key in values:
-                      candidate = values[key].strip()
-                      if candidate in expected:
-                          district_name = candidate
-                          break
-
-              if district_name:
-                  selected.append(feature)
-
-          print("Feature Buleleng:", len(selected))
-
-          actual = set()
-
-          for feature in selected:
-              props = feature.get("properties", {})
-
-              for key in (
-                  "DISTRICT",
-                  "DISTRICT_NAME",
-                  "KECAMATAN",
-                  "KECAMATAN_NAME",
-                  "WADMKC",
-                  "NAMOBJ",
-                  "NAME",
-                  "NAME_3",
-                  "NAME_2",
-              ):
-                  value = props.get(key)
-                  if value:
-                      value = str(value).strip().upper()
-                      if value in expected:
-                          actual.add(value)
-
-          print("Kecamatan ditemukan:")
-          for x in sorted(actual):
-              print(" -", x)
-
-          missing = expected - actual
-
-          if missing:
-              raise SystemExit(
-                  "Kecamatan belum lengkap: "
-                  + ", ".join(sorted(missing))
-              )
-
-          result = {
-              "type": "FeatureCollection",
-              "features": selected
-          }
-
-          with open(dst, "w", encoding="utf-8") as f:
-              json.dump(result, f, ensure_ascii=False, separators=(",", ":"))
-
-          print("GeoJSON berhasil dibuat:", dst)
-          PY
-
-      - name: Validasi akhir GeoJSON
+      - name: Validasi & simpan GeoJSON
         shell: bash
         run: |
           set -euo pipefail
@@ -159,30 +63,51 @@ jobs:
           import json
           from pathlib import Path
 
-          path = Path("data/buleleng-kecamatan.geojson")
+          src = Path("/tmp/buleleng-raw.geojson")
+          dst = Path("data/buleleng-kecamatan.geojson")
 
-          if not path.exists():
-              raise SystemExit("File GeoJSON tidak ditemukan")
+          expected = {
+              "GEROKGAK", "SERIRIT", "BUSUNGBIU", "BANJAR", "SUKASADA",
+              "BULELENG", "SAWAN", "KUBUTAMBAHAN", "TEJAKULA",
+          }
 
-          if path.stat().st_size == 0:
-              raise SystemExit("File GeoJSON kosong")
-
-          with path.open("r", encoding="utf-8") as f:
-              data = json.load(f)
+          data = json.loads(src.read_text(encoding="utf-8"))
 
           if data.get("type") != "FeatureCollection":
-              raise SystemExit("Bukan FeatureCollection")
-
-          count = len(data.get("features", []))
-
-          print("Jumlah feature:", count)
-
-          if count != 9:
               raise SystemExit(
-                  f"ERROR: seharusnya 9 kecamatan Buleleng, ditemukan {count}"
+                  "Respons BIG bukan FeatureCollection — kemungkinan layanan "
+                  "mengembalikan pesan error, bukan data geometri. Isi respons:\n"
+                  + json.dumps(data)[:500]
               )
 
-          print("VALIDASI BERHASIL")
+          features = data.get("features", [])
+          print("Total fitur dari BIG:", len(features))
+
+          found = set()
+          for f in features:
+              props = f.get("properties", {})
+              name = str(props.get("WADMKC", "")).strip().upper()
+              if name:
+                  found.add(name)
+
+          print("Kecamatan ditemukan:", sorted(found))
+
+          missing = expected - found
+          if missing:
+              raise SystemExit(
+                  "Kecamatan belum lengkap, hilang: " + ", ".join(sorted(missing))
+              )
+
+          if len(features) != 9:
+              raise SystemExit(
+                  f"ERROR: seharusnya tepat 9 fitur kecamatan, ditemukan {len(features)}"
+              )
+
+          dst.write_text(
+              json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          print("GeoJSON berhasil disimpan:", dst, "-", dst.stat().st_size, "bytes")
           PY
 
       - name: Simpan sumber data
@@ -190,17 +115,16 @@ jobs:
         run: |
           cat > data/buleleng-kecamatan-source.json <<'EOF'
           {
-            "dataset": "Batas administrasi kecamatan Bali",
-            "source_repository": "dmxsan/indonesia-admin-boundaries",
-            "source_claim": "Derived from official shapefiles provided by Badan Informasi Geospasial (BIG)",
-            "source_file": "processed-data/02-provinces/with-districts/Bali.geojson",
-            "area": "Kabupaten Buleleng",
+            "dataset": "Batas administrasi kecamatan Kabupaten Buleleng",
+            "source": "Badan Informasi Geospasial (BIG) - layanan RBI BATAS_KECAMATAN_AR",
+            "source_url": "https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0",
+            "filter": "KDPKAB='51.08' (Kabupaten Buleleng)",
+            "kabupaten_code_note": "BIG menulis kode kabupaten dengan format '51.08' (bertitik), bukan '5108'",
             "province_code": "51",
-            "kabupaten_code": "5108",
             "format": "GeoJSON",
             "crs": "WGS84 / EPSG:4326",
-            "status": "INTERIM",
-            "note": "Digunakan sebagai asset lokal sementara. Bukan salinan langsung BATAS_KECAMATAN_AR_2026 milik BIG."
+            "status": "STABIL - diambil langsung dari BIG lewat GitHub Actions (server-side) untuk menghindari blokir CORS di browser",
+            "field_kecamatan": "WADMKC"
           }
           EOF
 
@@ -220,5 +144,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Add Buleleng district GeoJSON boundary"
+          git commit -m "Update Buleleng district GeoJSON boundary (sumber: BIG langsung)"
           git push
