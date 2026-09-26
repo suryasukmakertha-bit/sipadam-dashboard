@@ -872,8 +872,8 @@ function initMap(){
   // BIG) — posisinya dari KECAMATAN_CENTER, jadi selalu tampil di zoom
   // berapa pun, tidak tergantung apakah gambar zona dari BIG berhasil dimuat.
   mapLabelLayer = L.layerGroup().addTo(sipadamMap);
-  sipadamMap.on('moveend', refreshBigExportOverlays);
-  sipadamMap.on('resize', refreshBigExportOverlays);
+  sipadamMap.on('moveend', scheduleRefreshOverlays);
+  sipadamMap.on('resize', scheduleRefreshOverlays);
 }
 
 function markerColorFor(r){
@@ -1042,7 +1042,11 @@ function clearBoundaryLayers(){
     mapZoneRasterLayer = null;
   }
   activeZoneDynamicLayers = null;
-  if(mapLabelLayer) mapLabelLayer.clearLayers();
+  // CATATAN: mapLabelLayer (nama kecamatan) SENGAJA tidak disentuh di sini.
+  // Itu dikelola sendiri oleh renderKecLabels(), yang dipanggil terpisah dari
+  // siklus render zona raster ini -- kalau ikut dibersihkan di sini, label
+  // yang baru dipasang renderKecLabels() langsung terhapus lagi sebelum
+  // sempat terlihat (bug yang pernah terjadi).
 }
 
 function clearContextLayer(){
@@ -1222,6 +1226,12 @@ function wireBigImageLayer(layer,label){
     if(note) note.style.display='none';
   });
   return layer;
+}
+
+let _refreshOverlaysTimer = null;
+function scheduleRefreshOverlays(){
+  clearTimeout(_refreshOverlaysTimer);
+  _refreshOverlaysTimer = setTimeout(refreshBigExportOverlays, 180);
 }
 
 function refreshBigExportOverlays(){
