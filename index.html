@@ -801,14 +801,14 @@ const RISK_COLORS = {
   empty:  { fill:'#A8AFBA', border:'#7B8490', label:'Data minim' }
 };
 const CORE_SYSTEMS = [
-  {key:'APAR',        labels:['APAR']},
-  {key:'HYDRANT',     labels:['HYDRANT']},
-  {key:'SMOKE',       labels:['SMOKE DETECTOR']},
-  {key:'HEAT',        labels:['HEAT DETECTOR']},
-  {key:'SPRINKLER',   labels:['SPRINKLER']},
-  {key:'ALARM',       labels:['FIRE ALARM','FIRE ALRM']},
-  {key:'WATER',       labels:['GROUND TANK / PENAMPUNG AIR SEJENIS']},
-  {key:'BLANKET',     labels:['FIRE BLANKET']}
+  {key:'APAR',        labels:['APAR'],                                name:'APAR'},
+  {key:'HYDRANT',     labels:['HYDRANT'],                             name:'Hydrant'},
+  {key:'SMOKE',       labels:['SMOKE DETECTOR'],                      name:'Smoke Detector'},
+  {key:'HEAT',        labels:['HEAT DETECTOR'],                       name:'Heat Detector'},
+  {key:'SPRINKLER',   labels:['SPRINKLER'],                           name:'Sprinkler'},
+  {key:'ALARM',       labels:['FIRE ALARM','FIRE ALRM'],              name:'Fire Alarm'},
+  {key:'WATER',       labels:['GROUND TANK / PENAMPUNG AIR SEJENIS'], name:'Ground Tank/Penampung Air'},
+  {key:'BLANKET',     labels:['FIRE BLANKET'],                        name:'Fire Blanket'}
 ];
 
 let sipadamMap = null;
@@ -985,6 +985,7 @@ function zonePopupHtml(kecName, m){
       <span class="k">Kelompok sistem teramati</span><span class="v">${m.families.size}/${CORE_SYSTEMS.length}</span>
       <span class="k">Indeks kesenjangan</span><span class="v">${Math.round(m.score*100)}%</span>
     </div>
+    <div class="zone-popup-note" style="margin-top:2px;">${m.families.size ? 'Alat yang teramati: '+escHtml(CORE_SYSTEMS.filter(sys=>m.families.has(sys.key)).map(sys=>sys.name).join(', ')) : 'Belum ada jenis alat yang teramati.'}</div>
     <div class="zone-popup-note">${escHtml(confidence)}</div>
   `;
 }
@@ -1247,9 +1248,17 @@ function mapSizeIsReady(){
   return s.x > 50 && s.y > 50;
 }
 
+let _sizeRetryCount = 0;
 function refreshBigExportOverlays(){
   if(!sipadamMap) return;
-  if(!mapSizeIsReady()) return; // tunggu ukuran kontainer stabil dulu
+  if(!mapSizeIsReady()){
+    if(_sizeRetryCount < 25){ // ~5 detik (25 x 200ms), lalu berhenti mencoba
+      _sizeRetryCount++;
+      setTimeout(refreshBigExportOverlays, 200);
+    }
+    return;
+  }
+  _sizeRetryCount = 0;
   const bounds=overlayBounds();
   if(activeContextDynamicLayers){
     const url=arcgisExportUrl(BIG_KABKOTA_MAP_URL,activeContextDynamicLayers);
