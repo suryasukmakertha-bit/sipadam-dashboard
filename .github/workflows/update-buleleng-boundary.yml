@@ -37,6 +37,11 @@ jobs:
 
           URL="https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_KECAMATAN_AR/MapServer/0/query?where=KDPKAB%3D%2751.08%27&outFields=WADMKC%2CWADMKK%2CWADMPR%2CKDPKAB&returnGeometry=true&outSR=4326&f=geojson"
 
+          # Server BIG menolak permintaan tanpa identitas seperti browser
+          # (curl polos kena "Empty reply from server") — jadi disamarkan
+          # sedikit di sini. Ini tetap tidak menjamin lolos kalau BIG
+          # memblokir berdasarkan alamat IP server GitHub Actions, bukan
+          # cuma berdasarkan header permintaan.
           curl \
             --fail \
             --silent \
@@ -46,6 +51,9 @@ jobs:
             --retry-delay 5 \
             --connect-timeout 30 \
             --max-time 180 \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "Accept: application/json, text/plain, */*" \
+            -H "Referer: https://geoservices.big.go.id/" \
             "$URL" \
             -o /tmp/buleleng-raw.geojson
 
