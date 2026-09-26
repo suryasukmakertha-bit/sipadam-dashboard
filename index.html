@@ -1166,8 +1166,16 @@ function buildContextDynamicLayer(){
 // rasio itu. Sekarang keduanya diskalakan bersama dengan faktor yang sama.
 function currentExportSize(){
   const size = sipadamMap ? sipadamMap.getSize() : {x:1024,y:520};
-  const rawW = Math.max(1, size.x);
-  const rawH = Math.max(1, size.y);
+  const rawW = Math.round(size.x), rawH = Math.round(size.y);
+  // Kalau kontainer peta belum selesai tata-letak (ukuran 0/nyaris 0 —
+  // ini lazim terjadi sesaat setelah peta baru dibuat), JANGAN dipakai
+  // untuk menghitung skala: itu pernah membuat permintaan gambar ke BIG
+  // jadi ratusan ribu piksel di satu sisi (render jadi >5 menit). Pakai
+  // ukuran aman sementara; permintaan berikutnya (setelah invalidateSize)
+  // akan memakai ukuran asli yang benar.
+  if(!(rawW > 50) || !(rawH > 50)){
+    return { width: 1024, height: 600 };
+  }
   const MIN_DIM = 400, MAX_DIM = 1600;
   let scale = 1;
   if(rawW > MAX_DIM || rawH > MAX_DIM) scale = Math.min(scale, MAX_DIM / Math.max(rawW, rawH));
