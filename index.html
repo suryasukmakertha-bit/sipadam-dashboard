@@ -767,8 +767,8 @@ const KECAMATAN_CENTER = {
   'Kubutambahan':  [-8.114, 115.204],
   'Tejakula':      [-8.130, 115.267],
   'Sukasada':      [-8.166, 115.103],
-  'Banjar':        [-8.148, 114.980],
-  'Seririt':       [-8.146, 114.947],
+  'Banjar':        [-8.190, 114.9675],
+  'Seririt':       [-8.194, 114.933],
   'Busungbiu':     [-8.230, 114.940],
   'Gerokgak':      [-8.181, 114.769]
 };
@@ -858,10 +858,17 @@ function initMap(){
   sipadamMap.createPane('zonePane');
   sipadamMap.createPane('labelPane');
   sipadamMap.createPane('markerPane');
+  sipadamMap.createPane('kecLabelPane');
   sipadamMap.getPane('regencyPane').style.zIndex = 250;
   sipadamMap.getPane('zonePane').style.zIndex = 350;
   sipadamMap.getPane('labelPane').style.zIndex = 500;
-  sipadamMap.getPane('markerPane').style.zIndex = 600; // di bawah tooltip (650) dan popup (700)
+  sipadamMap.getPane('markerPane').style.zIndex = 600;
+  // Titik lokasi dirender di <canvas> (preferCanvas) yang menutupi seluruh
+  // area peta dan menyerap semua klik di situ -- elemen HTML biasa (label
+  // kecamatan) di pane manapun DI BAWAH markerPane tidak akan pernah
+  // menerima klik apa pun, berapa pun angka z-index-nya. Makanya label
+  // kecamatan perlu pane TERSENDIRI di ATAS markerPane.
+  sipadamMap.getPane('kecLabelPane').style.zIndex = 620; // di bawah tooltip (650) dan popup (700)
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom:18,
@@ -1010,7 +1017,7 @@ function renderKecLabels(data, kecFilter){
     const m=metrics[kec] || {total:0,noEquip:0,withEquip:0,notFitEquip:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty'};
     const selected=kecFilter && normalizeKecName(kec)===normalizeKecName(kecFilter);
     const marker=L.marker(KECAMATAN_CENTER[kec], {
-      pane:'labelPane',
+      pane:'kecLabelPane',
       icon:L.divIcon({
         className:'',
         html:`<div class="kec-label"${selected?' style="border-color:var(--navy);box-shadow:0 0 0 2px rgba(18,36,68,.25);"':''}>${escHtml(kec)}</div>`,
@@ -1112,7 +1119,7 @@ function buildZoneDynamicLayer(data, kecFilter){
     const m=metrics[kec] || {total:0,noEquipRate:0,notFitRate:0,families:new Set(),score:0,level:'empty'};
     const c=RISK_COLORS[m.level] || RISK_COLORS.empty;
     const selected=kecFilter && normalizeKecName(kec)===normalizeKecName(kecFilter);
-    const fillA = m.level==='empty' ? 38 : (m.level==='high' ? 125 : (m.level==='medium' ? 110 : 98));
+    const fillA = m.level==='empty' ? 30 : (m.level==='high' ? 88 : (m.level==='medium' ? 78 : 70));
     const borderA = selected ? 255 : 220;
     const weight = selected ? 2.8 : 1.35;
     const variants=new Set([kec]);
@@ -1234,8 +1241,15 @@ function scheduleRefreshOverlays(){
   _refreshOverlaysTimer = setTimeout(refreshBigExportOverlays, 180);
 }
 
+function mapSizeIsReady(){
+  if(!sipadamMap) return false;
+  const s=sipadamMap.getSize();
+  return s.x > 50 && s.y > 50;
+}
+
 function refreshBigExportOverlays(){
   if(!sipadamMap) return;
+  if(!mapSizeIsReady()) return; // tunggu ukuran kontainer stabil dulu
   const bounds=overlayBounds();
   if(activeContextDynamicLayers){
     const url=arcgisExportUrl(BIG_KABKOTA_MAP_URL,activeContextDynamicLayers);
@@ -1252,7 +1266,7 @@ function refreshBigExportOverlays(){
       mapZoneRasterLayer.setBounds(bounds);
       mapZoneRasterLayer.setUrl(url);
     }else if(url){
-      mapZoneRasterLayer=wireBigImageLayer(L.imageOverlay(url,bounds,{pane:'zonePane',opacity:1,interactive:false,alt:'Zona indeks kecamatan Buleleng dari BIG'}).addTo(sipadamMap),'Layer zona kecamatan Buleleng');
+      mapZoneRasterLayer=wireBigImageLayer(L.imageOverlay(url,bounds,{pane:'zonePane',opacity:0.88,interactive:false,alt:'Zona indeks kecamatan Buleleng dari BIG'}).addTo(sipadamMap),'Layer zona kecamatan Buleleng');
     }
   }
 }
