@@ -1220,16 +1220,40 @@ function overlayBounds(){
   return [[b.getSouth(),b.getWest()],[b.getNorth(),b.getEast()]];
 }
 
+// Server BIG sesekali membalas kosong (ERR_EMPTY_RESPONSE) untuk permintaan
+// render geometri Buleleng yang rumit -- sifatnya TIDAK KONSISTEN (kadang
+// berhasil, kadang tidak), bukan gagal permanen. Jadi kalau gagal, dicoba
+// lagi otomatis beberapa kali dengan jeda membesar, sebelum benar-benar
+// menyerah dan menampilkan catatan ke pengguna.
 function wireBigImageLayer(layer,label){
   if(!layer) return layer;
+  let attempt = 0;
+  const MAX_ATTEMPTS = 4;
   layer.on('error',function(){
+    attempt++;
+    if(attempt < MAX_ATTEMPTS){
+      const note=document.getElementById('mapBoundaryNote');
+      if(note){
+        note.textContent='Mencoba lagi memuat '+label.toLowerCase()+'... ('+attempt+'/'+MAX_ATTEMPTS+')';
+        note.style.display='block';
+      }
+      setTimeout(()=>{
+        if(!sipadamMap) return;
+        // Tambah parameter pengacau supaya browser tidak diam-diam memakai
+        // hasil gagal yang sama dari cache, lalu minta ulang ke server.
+        const bust = (layer._url.includes('?') ? '&' : '?') + '_retry=' + Date.now();
+        try{ layer.setUrl(layer._url.replace(/&_retry=\d+$/,'') + bust); }catch(e){}
+      }, 600 * attempt);
+      return;
+    }
     const note=document.getElementById('mapBoundaryNote');
     if(note){
-      note.textContent=label+' gagal dimuat dari BIG. Cek koneksi internet/HTTPS atau buka ulang halaman.';
+      note.textContent=label+' gagal dimuat dari BIG setelah beberapa percobaan. Coba geser sedikit petanya, atau muat ulang halaman.';
       note.style.display='block';
     }
   });
   layer.on('load',function(){
+    attempt = 0;
     const note=document.getElementById('mapBoundaryNote');
     if(note) note.style.display='none';
   });
