@@ -463,9 +463,12 @@
           <span><i class="dot" style="background:#1E7B34;"></i> Titik layak</span>
           <span><i class="dot" style="background:#E1372C;"></i> Titik tidak layak</span>
           <span><i class="dot" style="background:#5B6270;"></i> Tanpa alat</span>
+          <span><i class="dot" style="background:#1E7B34;border-radius:3px;"></i> Hydrant/Ground Tank kondisi baik</span>
+          <span><i class="dot" style="background:#E1372C;border-radius:3px;"></i> Hydrant/Ground Tank kondisi tidak baik</span>
         </div>
       </div>
       <div class="map-wrap" id="mapWrap"></div>
+      <p class="map-empty-note" style="display:block;margin-top:8px;">Lingkaran di sekitar titik hydrant/ground tank menandai jangkauan kasar ~30m (SNI 03-1745-2000, untuk hydrant; dipakai juga untuk ground tank sebagai bantu-visual, bukan standar khusus) — bukan jaminan teknis, hanya bantu perkiraan visual.</p>
       <div class="map-method">
         <span class="map-zone-chip"><i class="map-zone-dot" style="background:#2E8B57;"></i><strong>0–24%</strong> kesenjangan proteksi</span>
         <span class="map-zone-chip"><i class="map-zone-dot" style="background:#F2B705;"></i><strong>25–49%</strong> kesenjangan proteksi</span>
@@ -820,6 +823,7 @@ let activeZoneDynamicLayers = null;
 let activeContextDynamicLayers = null;
 let mapLabelLayer = null; // label nama kecamatan (vektor kita sendiri, bukan dari BIG)
 let mapMarkerLayer = null;
+let mapCoverageLayer = null;
 let mapPopupData = [];
 let mapRenderVersion = 0;
 let activeMapData = [];
@@ -856,11 +860,13 @@ function initMap(){
   // Urutan layer: konteks Bali < zona kecamatan < label server < marker.
   sipadamMap.createPane('regencyPane');
   sipadamMap.createPane('zonePane');
+  sipadamMap.createPane('coveragePane');
   sipadamMap.createPane('labelPane');
   sipadamMap.createPane('markerPane');
   sipadamMap.createPane('kecLabelPane');
   sipadamMap.getPane('regencyPane').style.zIndex = 250;
   sipadamMap.getPane('zonePane').style.zIndex = 350;
+  sipadamMap.getPane('coveragePane').style.zIndex = 380; // lingkaran jangkauan hydrant/ground tank
   sipadamMap.getPane('labelPane').style.zIndex = 500;
   sipadamMap.getPane('markerPane').style.zIndex = 600;
   // Titik lokasi dirender di <canvas> (preferCanvas) yang menutupi seluruh
@@ -875,6 +881,7 @@ function initMap(){
     attribution:'&copy; OpenStreetMap contributors'
   }).addTo(sipadamMap);
   mapMarkerLayer = L.layerGroup().addTo(sipadamMap);
+  mapCoverageLayer = L.layerGroup().addTo(sipadamMap);
   // Label nama kecamatan: layer grup vektor milik kita sendiri (bukan dari
   // BIG) — posisinya dari KECAMATAN_CENTER, jadi selalu tampil di zoom
   // berapa pun, tidak tergantung apakah gambar zona dari BIG berhasil dimuat.
@@ -1065,24 +1072,81 @@ function clearContextLayer(){
   activeContextDynamicLayers = null;
 }
 
+// Radius jangkauan kasar di sekitar titik hydrant/ground tank, untuk bantu
+// visual saja (bukan bagian rumus indeks). 30m mengacu SNI 03-1745-2000
+// (satu hydrant melindungi ~1000 m2, setara radius 30m) -- dipakai juga
+// untuk ground tank sebagai perkiraan kasar, karena tidak ada standar
+// radius resmi khusus ground tank (sifatnya sumber air, bukan alat semprot).
+const HYDRANT_GT_COVERAGE_RADIUS_M = 30;
+
+// Kondisi hydrant/ground tank di satu lokasi bisa lebih dari satu unit --
+// dipakai kondisi TERBURUK yang teramati (kalau ada satu saja yang "Tidak
+// Baik", seluruh titik ditandai merah), konsisten dengan cara StatusInstansi
+// menilai kelayakan di tempat lain pada SIPADAM. Data lama yang belum punya
+// field Kondisi (sebelum fitur ini ditambahkan) ditandai abu-abu/"belum
+// diketahui", bukan diasumsikan baik atau buruk.
+function hydrantGroundTankInfo(r){
+  const hydrantList = safeParseJSON(r.DetailHydrant);
+  const groundTankList = safeParseJSON(r.DetailGroundTank);
+  const has = (hydrantList && hydrantList.length) || (groundTankList && groundTankList.length);
+  if(!has) return null;
+  const allKondisi = [...hydrantList, ...groundTankList].map(x=>x && x.kondisi).filter(Boolean);
+  let level = 'unknown';
+  if(allKondisi.length){
+    level = allKondisi.includes('Tidak Baik') ? 'buruk' : 'baik';
+  }
+  return { has:true, level };
+}
+
+function hydrantGtIconHtml(level){
+  const color = level==='buruk' ? '#E1372C' : (level==='baik' ? '#1E7B34' : '#9AA0AC');
+  return `<div style="width:20px;height:20px;background:${color};border:2px solid #fff;border-radius:5px;box-shadow:0 1px 3px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;">
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M12 2C12 2 5 10.5 5 15.5a7 7 0 0 0 14 0C19 10.5 12 2 12 2z"/></svg>
+  </div>`;
+}
+
 function renderMarkers(data){
   mapMarkerLayer.clearLayers();
+  if(mapCoverageLayer) mapCoverageLayer.clearLayers();
   mapPopupData=[];
   const withCoords=data.filter(r=>r.Latitude && r.Longitude && !isNaN(parseFloat(r.Latitude)) && !isNaN(parseFloat(r.Longitude)));
   withCoords.forEach(r=>{
     const lat=parseFloat(r.Latitude), lng=parseFloat(r.Longitude);
     const idx=mapPopupData.length;
     mapPopupData.push(r);
-    const marker=L.circleMarker([lat,lng], {
-      pane:'markerPane',
-      radius:7,
-      color:'#fff',
-      weight:2,
-      fillColor:markerColorFor(r),
-      fillOpacity:0.96,
-      riseOnHover:true,
-      bubblingMouseEvents:false
-    });
+    const gtInfo = hydrantGroundTankInfo(r);
+    let marker;
+    if(gtInfo){
+      marker = L.marker([lat,lng], {
+        pane:'markerPane',
+        icon:L.divIcon({className:'', html:hydrantGtIconHtml(gtInfo.level), iconSize:[20,20], iconAnchor:[10,10]}),
+        riseOnHover:true,
+        bubblingMouseEvents:false
+      });
+      if(sipadamMap){
+        L.circle([lat,lng], {
+          pane:'coveragePane',
+          radius:HYDRANT_GT_COVERAGE_RADIUS_M,
+          color:gtInfo.level==='buruk' ? '#E1372C' : '#1E7B34',
+          weight:1,
+          opacity:0.55,
+          fillColor:gtInfo.level==='buruk' ? '#E1372C' : '#1E7B34',
+          fillOpacity:0.08,
+          interactive:false
+        }).addTo(mapCoverageLayer);
+      }
+    } else {
+      marker = L.circleMarker([lat,lng], {
+        pane:'markerPane',
+        radius:7,
+        color:'#fff',
+        weight:2,
+        fillColor:markerColorFor(r),
+        fillOpacity:0.96,
+        riseOnHover:true,
+        bubblingMouseEvents:false
+      });
+    }
     marker.bindTooltip(escHtml(r.NamaInstansi||'Lokasi assessment'), {direction:'top', offset:[0,-5], opacity:0.92});
     marker.bindPopup(popupHtmlFor(r,idx));
     marker.addTo(mapMarkerLayer);
@@ -1686,9 +1750,9 @@ function showDetail(r){
         </div>
         <div id="secGroundTank">
           <table class="mini-table">
-            <thead><tr><th>Jenis mesin</th><th class="num">Volume</th></tr></thead>
+            <thead><tr><th>Kondisi</th><th>Jenis mesin</th><th class="num">Volume</th></tr></thead>
             <tbody>
-              ${groundTankList.map(g=>`<tr><td>${g.jenisMesin||'—'}</td><td class="num">${g.volume||0} ${g.volumeSatuan==='liter'?'liter':'m³'}</td></tr>`).join('')}
+              ${groundTankList.map(g=>`<tr><td>${g.kondisi||'—'}</td><td>${g.jenisMesin||'—'}</td><td class="num">${g.volume||0} ${g.volumeSatuan==='liter'?'liter':'m³'}</td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -1980,11 +2044,12 @@ function startEditApar(){
 
 function startEditGroundTank(){
   renderGenericRowEditor('secGroundTank', [
+    {key:'kondisi', label:'Kondisi', type:'select', options:['Baik','Tidak Baik']},
     {key:'jenisMesin', label:'Jenis mesin', type:'text'},
     {key:'volume', label:'Volume', type:'number'},
     {key:'volumeSatuan', label:'Satuan', type:'select', options:['m3','liter'], optionLabels:{m3:'m³', liter:'Liter'}}
   ], safeParseJSON(currentDetailRow.DetailGroundTank), (rows, btn, err)=>{
-    const fields = { DetailGroundTank: JSON.stringify(rows.map(r=>({jenisMesin:r.jenisMesin||'', volume:r.volume||0, volumeSatuan:r.volumeSatuan||'m3'}))) };
+    const fields = { DetailGroundTank: JSON.stringify(rows.map(r=>({kondisi:r.kondisi||'', jenisMesin:r.jenisMesin||'', volume:r.volume||0, volumeSatuan:r.volumeSatuan||'m3'}))) };
     err.id = 'err_secGroundTank';
     saveSectionUpdate(fields, btn, 'err_secGroundTank');
   });
@@ -2285,8 +2350,8 @@ function downloadDetailPdf(){
     if(groundTankList.length){
       ensureSpace(30);
       sectionTitle('Ground Tank / penampung air sejenis');
-      detailTable(['Jenis mesin','Volume'],
-        groundTankList.map(g=>[g.jenisMesin||'—', (g.volume||0)+' '+(g.volumeSatuan==='liter'?'liter':'m³')]));
+      detailTable(['Kondisi','Jenis mesin','Volume'],
+        groundTankList.map(g=>[g.kondisi||'—', g.jenisMesin||'—', (g.volume||0)+' '+(g.volumeSatuan==='liter'?'liter':'m³')]));
     }
 
     const alatLainList = safeParseJSON(r.DetailAlatLain);
