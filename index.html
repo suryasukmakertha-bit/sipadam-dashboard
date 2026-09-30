@@ -379,6 +379,11 @@
         <select id="filterKec"><option value="">Semua kecamatan</option></select>
       </div>
       <div class="ff">
+        <label>Desa/Kelurahan</label>
+        <input type="text" id="filterDesa" list="filterDesaList" placeholder="Semua desa/kelurahan" autocomplete="off">
+        <datalist id="filterDesaList"></datalist>
+      </div>
+      <div class="ff">
         <label>Jenis gedung</label>
         <select id="filterJenis"><option value="">Semua jenis</option></select>
       </div>
@@ -669,21 +674,44 @@ async function loadData(){
 
 function populateFilterOptions(){
   const kecSet = new Set(), jenisSet = new Set();
+  const desaGroups = new Map(); // nama ternormalisasi -> {tampilan -> jumlah}
   rawData.forEach(r=>{
     if(r.Kecamatan) kecSet.add(r.Kecamatan);
     if(r.JenisGedung) jenisSet.add(r.JenisGedung);
+    const rawDesa = String(r.DesaKelurahan||'').trim();
+    if(rawDesa){
+      const key = normalizeDesaName(rawDesa);
+      if(key){
+        if(!desaGroups.has(key)) desaGroups.set(key, new Map());
+        const variants = desaGroups.get(key);
+        variants.set(rawDesa, (variants.get(rawDesa)||0) + 1);
+      }
+    }
   });
   const kecSel = document.getElementById('filterKec');
   const jenisSel = document.getElementById('filterJenis');
+  const desaList = document.getElementById('filterDesaList');
   // Bersihkan opsi lama dulu (sisakan opsi "Semua ...") biar tidak dobel
   // kalau loadData() dipanggil ulang lewat tombol "Coba lagi".
   while(kecSel.options.length > 1) kecSel.remove(1);
   while(jenisSel.options.length > 1) jenisSel.remove(1);
+  desaList.innerHTML = '';
   Array.from(kecSet).sort().forEach(k=>{
     const o = document.createElement('option'); o.value=k; o.textContent=k; kecSel.appendChild(o);
   });
   Array.from(jenisSet).sort().forEach(j=>{
     const o = document.createElement('option'); o.value=j; o.textContent=j; jenisSel.appendChild(o);
+  });
+  // Tiap kelompok desa ditampilkan SEKALI di dropdown, memakai ejaan yang
+  // paling sering ditulis petugas untuk desa itu (bukan menampilkan semua
+  // variasi ejaan sebagai opsi terpisah).
+  const desaDisplay = Array.from(desaGroups.entries()).map(([key, variants])=>{
+    let best = null, bestCount = -1;
+    variants.forEach((count, name)=>{ if(count > bestCount){ best = name; bestCount = count; } });
+    return best;
+  }).sort((a,b)=>a.localeCompare(b));
+  desaDisplay.forEach(name=>{
+    const o = document.createElement('option'); o.value = name; desaList.appendChild(o);
   });
 }
 
@@ -691,6 +719,7 @@ function resetFilters(){
   document.getElementById('filterFrom').value='';
   document.getElementById('filterTo').value='';
   document.getElementById('filterKec').value='';
+  document.getElementById('filterDesa').value='';
   document.getElementById('filterJenis').value='';
   document.getElementById('filterStatus').value='';
   document.getElementById('filterAlatProteksi').value='';
@@ -714,6 +743,7 @@ function applyFilters(){
   const from = document.getElementById('filterFrom').value;
   const to = document.getElementById('filterTo').value;
   const kec = document.getElementById('filterKec').value;
+  const desa = document.getElementById('filterDesa').value.trim();
   const jenis = document.getElementById('filterJenis').value;
   const status = document.getElementById('filterStatus').value;
   const alatProteksi = document.getElementById('filterAlatProteksi').value;
@@ -722,6 +752,7 @@ function applyFilters(){
 
   const filtered = rawData.filter(r=>{
     if(kec && r.Kecamatan !== kec) return false;
+    if(desa && normalizeDesaName(r.DesaKelurahan) !== normalizeDesaName(desa)) return false;
     if(jenis && r.JenisGedung !== jenis) return false;
     if(status && r.StatusInstansi !== status) return false;
     if(alatProteksi && r.MemilikiAlatProteksi !== alatProteksi) return false;
@@ -737,7 +768,7 @@ function applyFilters(){
 
   renderStats(filtered);
   renderCharts(filtered);
-  renderMap(filtered, kec);
+  renderMap(filtered, kec, desa);
   renderTable(filtered);
 }
 
@@ -828,6 +859,15 @@ let mapPopupData = [];
 let mapRenderVersion = 0;
 let activeMapData = [];
 let activeMapKecFilter = '';
+let activeMapDesaFilter = '';
+
+function normalizeDesaName(v){
+  return String(v||'')
+    .toLowerCase()
+    .replace(/^(kel\.?|kelurahan|desa)\s+/,'')
+    .replace(/\s+/g,' ')
+    .trim();
+}
 
 function normalizeKecName(v){
   return String(v||'').toLowerCase().replace(/\s+/g,'').replace(/[^a-z0-9]/g,'');
@@ -1049,8 +1089,29 @@ function renderKecLabels(data, kecFilter){
   });
 }
 
-function zoomMapToSelection(kecFilter){
+function zoomMapToSelection(data, kecFilter, desaFilter){
   if(!sipadamMap) return;
+  if(!kecFilter && !desaFilter){
+    sipadamMap.flyTo(BULELENG_CENTER, BULELENG_ZOOM, {duration:0.6});
+    return;
+  }
+  const pts = (data||[])
+    .filter(r=>r.Latitude && r.Longitude && !isNaN(parseFloat(r.Latitude)) && !isNaN(parseFloat(r.Longitude)))
+    .map(r=>[parseFloat(r.Latitude), parseFloat(r.Longitude)]);
+  if(pts.length){
+    // Satu titik saja: flyTo biasa (fitBounds pada satu titik akan zoom
+    // sampai batas maksimum, kurang enak dilihat).
+    if(pts.length === 1){
+      sipadamMap.flyTo(pts[0], desaFilter ? 16 : KECAMATAN_ZOOM, {duration:0.6});
+    } else {
+      sipadamMap.flyToBounds(L.latLngBounds(pts).pad(0.3), {duration:0.6, maxZoom: desaFilter ? 16 : KECAMATAN_ZOOM});
+    }
+    return;
+  }
+  // Belum ada titik berkoordinat yang cocok (mis. data lama sebelum GPS
+  // wajib) -- kalau yang dipilih kecamatan, masih bisa pakai titik tengah
+  // perkiraan lama sebagai cadangan. Untuk desa tidak ada cadangan seperti
+  // itu, jadi tetap di tampilan kecamatan/Buleleng.
   const key = canonicalKecName(kecFilter || '');
   if(kecFilter && KECAMATAN_CENTER[key]){
     sipadamMap.flyTo(KECAMATAN_CENTER[key], KECAMATAN_ZOOM, {duration:0.6});
@@ -1392,12 +1453,13 @@ function renderZonesServer(data,kecFilter){
   return true;
 }
 
-async function renderMap(data,kecFilter){
+async function renderMap(data,kecFilter,desaFilter){
   initMap();
   if(!sipadamMap) return;
   const renderId=++mapRenderVersion;
   activeMapData=data || [];
   activeMapKecFilter=kecFilter || '';
+  activeMapDesaFilter=desaFilter || '';
 
   renderMarkers(activeMapData);
   renderZoneSummary(activeMapData);
@@ -1417,7 +1479,7 @@ async function renderMap(data,kecFilter){
   if(note) note.style.display=(contextOk && zoneOk) ? 'none' : 'block';
   if(renderId!==mapRenderVersion) return;
 
-  zoomMapToSelection(activeMapKecFilter);
+  zoomMapToSelection(activeMapData, activeMapKecFilter, activeMapDesaFilter);
   setTimeout(()=>{
     if(!sipadamMap) return;
     sipadamMap.invalidateSize();
