@@ -864,11 +864,19 @@ function initMap(){
   sipadamMap.createPane('labelPane');
   sipadamMap.createPane('markerPane');
   sipadamMap.createPane('kecLabelPane');
+  sipadamMap.createPane('equipIconPane');
   sipadamMap.getPane('regencyPane').style.zIndex = 250;
   sipadamMap.getPane('zonePane').style.zIndex = 350;
   sipadamMap.getPane('coveragePane').style.zIndex = 380; // lingkaran jangkauan hydrant/ground tank
   sipadamMap.getPane('labelPane').style.zIndex = 500;
   sipadamMap.getPane('markerPane').style.zIndex = 600;
+  // Ikon hydrant/ground tank sempat ditaruh di markerPane (sama dengan
+  // <canvas> titik lokasi) dengan asumsi elemen DOM yang ditambah belakangan
+  // otomatis di atas -- ternyata TETAP tidak menerima klik (bug nyata,
+  // terbukti dari pengujian). Sama seperti label kecamatan sebelumnya:
+  // <canvas> preferCanvas menyerap semua klik di areanya sendiri, jadi ikon
+  // ini butuh pane TERSENDIRI di atas markerPane.
+  sipadamMap.getPane('equipIconPane').style.zIndex = 610;
   // Titik lokasi dirender di <canvas> (preferCanvas) yang menutupi seluruh
   // area peta dan menyerap semua klik di situ -- elemen HTML biasa (label
   // kecamatan) di pane manapun DI BAWAH markerPane tidak akan pernah
@@ -1118,7 +1126,7 @@ function renderMarkers(data){
     let marker;
     if(gtInfo){
       marker = L.marker([lat,lng], {
-        pane:'markerPane',
+        pane:'equipIconPane',
         icon:L.divIcon({className:'', html:hydrantGtIconHtml(gtInfo.level), iconSize:[20,20], iconAnchor:[10,10]}),
         riseOnHover:true,
         bubblingMouseEvents:false
